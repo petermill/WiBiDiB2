@@ -1,0 +1,144 @@
+# WiBiDiB2 — BiDiB ↔ WiThrottle Gateway for Raspberry Pi Pico 2W
+
+WiBiDiB2 is a model railroad control gateway that bridges **BiDiB** (the model railroad bus protocol) and **WiThrottle** (the WiFi throttle protocol used by apps like Engine Driver). It runs on a **Raspberry Pi Pico 2W** and uses the onboard WiFi.
+
+## Features
+
+- **BiDiB Interface** — 9-bit UART via PIO at 500 kbaud (GP18 TX, GP19 RX, GP6 DE/RE)
+- **WiFi Station (default)** — joins an existing WiFi network, IP via DHCP
+- **WiFi Access Point (fallback)** — hosts its own network if the STA connection fails, static IP 192.168.4.1 with built-in DHCP server
+- **WiThrottle TCP Server** — port 5550, up to 4 concurrent throttles
+- **mDNS Discovery** — advertises `WiBiDiB._withrottle._tcp.local.` so Engine Driver finds the gateway automatically (STA and AP modes)
+- **BiDiB Features** — `MSG_FEATURE_GETALL`/`GETNEXT`/`GET`/`SET` support with streaming (STRING_SIZE, STRING_DEBUG, FW_UPDATE_MODE, RELEVANT_PID_BITS)
+- **User Strings** — `MSG_STRING_GET` returns the vendor (`WiBiDiB2`) and user (`Cool WiBiDiB2`) strings
+- **Distributed Control** — BiDiB guest subscription/send support (DCCgen target mode)
+- **Heartbeat Monitoring** — 10-second timeout with emergency stop
+- **Non-blocking logging** — ring buffer drained to UART (debug probe bridge) without blocking the main loop
+- **External Flash Storage** — optional W25Q32VFSIG (4 MB SPI NOR) on SPI1 for persistent data (e.g. runtime-configurable WiFi credentials); SPI transfers do not block the BiDiB PIO ISRs
+
+## Hardware Requirements
+
+- Raspberry Pi Pico 2W
+- RS-485 transceiver (e.g., MAX485) for BiDiB bus connection:
+  - Pico GP18 → DI (driver input)
+  - Pico GP19 → RO (receiver output)
+  - Pico GP6  → DE/RE (driver/receiver enable)
+- W25Q32VFSIG SPI flash (optional) — 32 Mbit (4 MB) SPI NOR in SOIC-8, wired to SPI1:
+  - Pico GP10 → CLK (W25Q32 pin 6)
+  - Pico GP11 → DI/MOSI (W25Q32 pin 5)
+  - Pico GP12 → DO/MISO (W25Q32 pin 2)
+  - Pico GP13 → CS# (W25Q32 pin 1)
+  - W25Q32 pin 8 → 3.3 V, pin 4 → GND; tie WP# (pin 3) and HOLD# (pin 7) to 3.3 V
+
+## Building
+
+### Prerequisites
+
+- [Raspberry Pi Pico SDK](https://github.com/raspberrypi/pico-sdk) v2.2.0
+- CMake ≥ 3.13
+- ARM GCC toolchain (GCC 14.2 Rel1 or compatible)
+- Raspberry Pi Pico VS Code Extension (recommended)
+
+### Build Steps
+
+```bash
+# Clone the repo
+git clone <repo-url> WiBiDiB2
+cd WiBiDiB2
+
+# Configure (set PICO_SDK_PATH or let the SDK import.cmake locate it)
+cmake -B build -DPICO_BOARD=pico2_w
+
+# Build
+cmake --build build
+```
+
+Output files (in `build/`):
+- `WiBiDiB.uf2` — UF2 firmware for drag-and-drop flashing
+- `WiBiDiB.elf` — ELF executable
+- `WiBiDiB.hex` — Intel HEX
+- `WiBiDiB.bin` — Raw binary
+
+### Flashing
+
+1. Hold the BOOTSEL button on the Pico 2W while connecting USB.
+2. Copy `build/WiBiDiB.uf2` to the mounted RPI-RP2 drive.
+
+### VS Code (alternative)
+
+Open the project folder in VS Code with the Raspberry Pi Pico Extension installed. Use the **"Compile Project in RAM"** or **"Compile Project"** commands from the extension's status bar.
+
+## Configuration
+
+Edit `include/config.h`:
+
+| Define               | Default              | Description                              |
+|----------------------|----------------------|------------------------------------------|
+| `WIFI_SSID`          | `"myssid"`           | STA: WiFi network to join                |
+| `WIFI_PASSWORD`      | `"mypassword"`       | STA: WiFi network password               |
+| `WIFI_STA_TIMEOUT_MS`| `20000`              | STA connect/DHCP timeout before AP fallback |
+| `WIFI_AP_SSID`       | `"myssid"`           | AP: fallback access point SSID           |
+| `WIFI_AP_PASSWORD`   | `"mypassword"`       | AP: fallback access point password       |
+| `AP_IP_ADDR`         | `"192.168.4.1"`      | Static IP of the AP                      |
+| `WITHROTTLE_PORT`    | `5550`               | WiThrottle TCP port                      |
+| `MAX_CLIENTS`        | `4`                  | Maximum simultaneous throttles           |
+| `HEARTBEAT_TIMEOUT_S`| `10`                 | Heartbeat timeout in seconds             |
+
+### Local network credentials
+
+To keep your STA credentials out of source control, copy `include/network_config.example.h` to `include/network_config.h` (git-ignored) and set `WIFI_SSID` / `WIFI_PASSWORD` there. If the file exists it overrides the `config.h` defaults; the firmware builds fine without it.
+
+## Flash Storage
+
+The optional external W25Q32VFSIG (Winbond, 4 MB SPI NOR) is probed at boot on SPI1 (`flash_store_init()`). If the chip is missing or miswired, the gateway continues without storage — it never blocks startup.
+
+- Reads and writes are **synchronous but IRQ-safe**: `spi_write/read_blocking()` keep interrupts enabled, so the BiDiB PIO ISRs (priority 0) keep draining the RX FIFO during transfers. Unlike onboard XIP flash writes, external SPI does **not** stall the system.
+- Writes preserve untouched data in the affected 4 KB sectors (read-modify-write) and program page-by-page (256 bytes).
+- API: `flash_store_read()`, `flash_store_write()`, `flash_store_erase_all()`, `flash_store_jedec_id()`.
+
+## Protocol
+
+- **WiThrottle** — standard protocol as used by JMRI WiThrottle / Engine Driver
+- **mDNS** — service `WiBiDiB._withrottle._tcp.local.`, port 5550; the gateway is discovered automatically by Engine Driver, no manual IP/port entry needed
+- **BiDiB** — protocol version 0.8, distributed control (rev 1.29) for DCCgen target mode
+
+## Project Structure
+
+```
+WiBiDiB2/
+├── main.c                        # Entry point & main loop
+├── bidib.c                       # BiDiB PIO protocol (ISR-driven)
+├── bidib_uart.pio                # PIO assembly (9-bit UART, 500k baud)
+├── tcp_server.c                  # WiFi (STA + AP fallback) + TCP server
+├── withrottle_if.c               # WiThrottle message processing
+├── smartphone_if.c               # Throttle table management
+├── bidib_client_parser.c         # BiDiB client message parser
+├── bidib_client_if.c             # BiDiB client interface
+├── crc_8bit.c                    # CRC-8 for BiDiB frames
+├── log.c                         # Non-blocking ring-buffer logging (UART)
+├── mdns.c                        # mDNS responder (_withrottle._tcp)
+├── flash_store.c                 # W25Q32VFSIG external SPI flash driver
+├── dhcpserver/                   # DHCP server (from pico-examples)
+├── include/                      # Header files
+│   ├── config.h
+│   ├── network_config.example.h  # Template for local STA credentials
+│   ├── datatypes.h
+│   ├── bidib.h
+│   ├── bidib_messages.h          # Official BiDiB message definitions
+│   ├── bidib_distributed_control.h
+│   ├── features.h                # WiThrottle node feature table
+│   ├── log.h
+│   ├── mdns.h
+│   ├── flash_store.h             # Flash pin config + API
+│   ├── tcp_server.h
+│   ├── withrottle_if.h
+│   ├── smartphone_if.h
+│   ├── lwipopts.h
+│   └── crc_8bit.h
+├── CMakeLists.txt
+└── pico_sdk_import.cmake
+```
+
+## License
+
+This project uses the BiDiB protocol headers from [bidib.org](http://www.bidib.org) and the DHCP server from Raspberry Pi Pico Examples. See individual file headers for license terms.

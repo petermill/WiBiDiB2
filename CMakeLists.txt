@@ -39,10 +39,13 @@ pico_sdk_init()
     tcp_server.c
     smartphone_if.c
     withrottle_if.c
+    log.c
     # dhcpserver fourni par pico-examples — copier le dossier dhcpserver/ ici
     dhcpserver/dhcpserver.c
     bidib_client_parser.c
     bidib_client_if.c
+    mdns.c
+    flash_store.c
 )
 
 # Générer le header C depuis le fichier PIO
@@ -53,9 +56,9 @@ pico_generate_pio_header(WiBiDiB
 pico_set_program_name(WiBiDiB "WiBiDiB")
 pico_set_program_version(WiBiDiB "0.1")
 
-# Sortie USB pour printf, UART désactivé
-pico_enable_stdio_uart(WiBiDiB 0)
-pico_enable_stdio_usb(WiBiDiB 1)
+# Sortie UART (bridge debug probe), USB désactivé
+pico_enable_stdio_uart(WiBiDiB 1)
+pico_enable_stdio_usb(WiBiDiB 0)
 
 # Bibliothèques
 target_link_libraries(WiBiDiB
@@ -65,6 +68,8 @@ target_link_libraries(WiBiDiB
     hardware_gpio
     pico_unique_id
     pico_cyw43_arch_lwip_poll   # WiFi + lwIP bare-metal
+    pico_lwip_mdns              # répondant mDNS (découverte Engine Driver)
+    hardware_spi                # SPI1 → flash W25Q32VFSIG
 )
 
 target_include_directories(WiBiDiB PRIVATE

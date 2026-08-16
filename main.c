@@ -18,6 +18,7 @@
 #include "tcp_server.h"
 #include "smartphone_if.h"
 #include "bidib_client_parser.h"
+#include "flash_store.h"
 #include "config.h"
 
 static const char *TAG = "main";
@@ -25,9 +26,41 @@ static const char *TAG = "main";
 int main(void)
 {
     stdio_init_all();
+    log_init();        // ring buffer de log non-bloquant
     sleep_ms(3000);  // attendre USB serial
     LOG_INFO(TAG,"=== WI_BIDIB_ED Pico 2W v0.2 ===");
     stdio_flush();
+
+    // // ── BiDiB PIO (inchangé) ──────────────────────────────────────────────────
+    // // ISR RX/TX enregistrées dans bidib_init(), tournent en hardware
+    // bidib_init();
+    // LOG_INFO(TAG,"BiDiB PIO OK");
+    // init_bidib_client();
+    // LOG_INFO(TAG,"BiDiB client init OK");
+
+    // // ── WiFi AP + TCP WiThrottle ──────────────────────────────────────────────
+    // smartphone_if_init();   // init table throttle[] + UID BiDiB
+
+    if (!wifi_init()) {
+        printf("WiFi ERREUR — on continue sans WiFi\n");
+        // On ne bloque pas : le BiDiB seul reste fonctionnel
+    } else {
+        if (!tcp_server_init()) {
+            printf("TCP server ERREUR\n");
+        } else {
+            LOG_INFO(TAG,"WiFi + TCP OK — port:5550");
+        }
+    }
+
+    printf("Boucle principale\n");
+
+    // ── Flash externe W25Q32VFSIG (SPI1) ────────────────────────────────────
+    // Non bloquant pour BiDiB : les ISR PIO (priorité 0) tournent pendant
+    // les transferts SPI. En cas d'absence du circuit, on continue.
+    // Doit précéder init_bidib_client() (charge la chaîne utilisateur).
+    if (!flash_store_init()) {
+        LOG_WARN(TAG, "flash externe absente — on continue sans stockage");
+    }
 
     // ── BiDiB PIO (inchangé) ──────────────────────────────────────────────────
     // ISR RX/TX enregistrées dans bidib_init(), tournent en hardware
@@ -39,20 +72,6 @@ int main(void)
     // ── WiFi AP + TCP WiThrottle ──────────────────────────────────────────────
     smartphone_if_init();   // init table throttle[] + UID BiDiB
 
-    if (!wifi_init_softap()) {
-        printf("WiFi AP ERREUR — on continue sans WiFi\n");
-        // On ne bloque pas : le BiDiB seul reste fonctionnel
-    } else {
-        if (!tcp_server_init()) {
-            printf("TCP server ERREUR\n");
-        } else {
-            LOG_INFO(TAG,"WiFi AP + TCP OK — SSID:myssid port:5550");
-        }
-    }
-
-    printf("Boucle principale\n");
-
-
     // ── Boucle principale ─────────────────────────────────────────────────────
     //
     // cyw43_arch_poll() déclenche les callbacks TCP (recv, accept, err)
@@ -63,6 +82,7 @@ int main(void)
     //
     while (1) {
         cyw43_arch_poll();  // traite WiFi + lwIP callbacks
+        log_poll();         // draine le ring buffer vers USB sans bloquer
         run_bidib_client(); 
       //  sleep_ms(1);
     }
