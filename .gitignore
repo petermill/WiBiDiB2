@@ -1,3 +1,6 @@
 build
+build_ninja/
 !.vscode/*
 GitHu_token_WiBiDiB2.txt
+# Local WiFi credentials for STA mode
+include/network_config.h
