@@ -109,11 +109,11 @@ bool send_bidib_message(uint8_t *message) {
     busy_wait_us_32(2);
     gpio_put(BIDIB_PIN_TEST , 0);
     
-// LOG_INFO(TAG, " in send_bidib_message mg%s ", message);
+LOG_INFO(TAG, " in send_bidib_message mg%s ", *message);
 
     return bidib_tx_fifo_put(message);
     
-    return bidib_tx_fifo_put(message);
+   // return bidib_tx_fifo_put(message);
 }
 
 // ─── Messages système de base ────────────────────────────────────────────────
@@ -275,7 +275,12 @@ static bool bidib_guest_req_send(uint8_t msg_type_target,
     message[i++] = target_mode;      // TARGET_MODE
     message[i++] = msg_type_target;  // type du message cible (ex: MSG_CS_DRIVE)
     for (uint8_t j = 0; j < data_len; j++)
-        message[i++] = msg_data[j];
+       {
+            message[i++] = msg_data[j];
+            printf(" msg_data[%d]=%02x", j, msg_data[j]);
+       } 
+                    printf(" \n");
+
     return send_bidib_message(message);
 }
 
@@ -504,43 +509,41 @@ static uint8_t process_bidib_message(uint8_t *bidib_rx_msg) {
             break;
 
         case MSG_GUEST_RESP_SUBSCRIPTION:   // 0x51
-            {
-                
-            uint8_t *p = msg_type + 1;
-            uint8_t targetMode = *p++;
+            {   
+                uint8_t *p = msg_type + 1;
+                uint8_t targetMode = *p++;
 
-            uint8_t target_uid[5];
-            memcpy(target_uid, p, 5);
-            p += 5;
+                uint8_t target_uid[5];
+                memcpy(target_uid, p, 5);
+                p += 5;
 
-            uint8_t ack_seq = *p++;
-            uint8_t result  = *p++;
+                uint8_t ack_seq = *p++;
+                uint8_t result  = *p++;
 
-            uint16_t subscription = (uint16_t)*p++;
-            subscription |= ((uint16_t)*p++ << 8);
+                uint16_t subscription = (uint16_t)*p++;
+                subscription |= ((uint16_t)*p++ << 8);
 
-            printf("[bidib_parser] RESP_SUBSCRIPTION target=0x%02X uid=%02X:%02X:%02X:%02X:%02X ack_seq=%02X result=0x%02X sub=0x%04X\n",
-                targetMode, target_uid[0], target_uid[1], target_uid[2], target_uid[3], target_uid[4],
-                ack_seq, result, subscription);
+                printf("[bidib_parser] RESP_SUBSCRIPTION target=0x%02X uid=%02X:%02X:%02X:%02X:%02X ack_seq=%02X result=0x%02X sub=0x%04X\n",
+                    targetMode, target_uid[0], target_uid[1], target_uid[2], target_uid[3], target_uid[4],
+                    ack_seq, result, subscription);
 
-            if (result == 0x00) {
-                g_bidib_guest_enabled = 1;
-                if (targetMode == BIDIB_TARGET_MODE_DCCGEN) {
-                    printf("[bidib_parser] DCCGEN subscription confirmed → CS_DRIVE enabled\n");
-                    //memcpy(g_dccgen_target_uid, target_uid, 5);  // à stocker pour usage futur si besoin
-                    memcpy(guest_targets.dccgen_uid, target_uid, 5);
-                } else if (targetMode == BIDIB_TARGET_MODE_BOOSTER) {
-                    printf("[bidib_parser] BOOSTER subscription confirmed → BOOST_ON enabled\n");
-                    memcpy(guest_targets.booster_uid, target_uid, 5);
-                    //memcpy(g_booster_target_uid, target_uid, 5);
+                if (result == 0x00) {
+                    g_bidib_guest_enabled = 1;
+                    if (targetMode == BIDIB_TARGET_MODE_DCCGEN) {
+                        printf("[bidib_parser] DCCGEN subscription confirmed → CS_DRIVE enabled\n");
+                        //memcpy(g_dccgen_target_uid, target_uid, 5);  // à stocker pour usage futur si besoin
+                        memcpy(guest_targets.dccgen_uid, target_uid, 5);
+                    } else if (targetMode == BIDIB_TARGET_MODE_BOOSTER) {
+                        printf("[bidib_parser] BOOSTER subscription confirmed → BOOST_ON enabled\n");
+                        memcpy(guest_targets.booster_uid, target_uid, 5);
+                        //memcpy(g_booster_target_uid, target_uid, 5);
+                    }
+                } else {
+                    printf("[bidib_parser] guest subscription REFUSED (result=0x%02X)\n", result);
                 }
-            } else {
-                printf("[bidib_parser] guest subscription REFUSED (result=0x%02X)\n", result);
+         
             }
-        break;
-                
-            }
-
+            break;
         // ── Messages non gérés ────────────────────────────────────────────────
         case MSG_SYS_CLOCK:   // 0x18
             break;
@@ -694,7 +697,7 @@ void init_bidib_client(void) {
 //   dcc_addr  : adresse DCC de la loco (14 bits)
 //   speed     : 0..126 (128 steps) ou -1 emergency stop
 //   dir       : 1=avant, 0=arrière
-//   f         : tableau LocoState[29] (F0..F28)
+//   f         : tableau  (F0..F28)
 //
 // Format MSG_CS_DRIVE (d'après bidib_messages.h) :
 //   [addrl][addrh][format][active][speed][f4_f0][f12_f5][f20_f13][f28_f21]
@@ -705,15 +708,15 @@ void init_bidib_client(void) {
 //   [REQ_MSG_TYPE=MSG_CS_DRIVE]
 //   [REQ_DATA...]         ← les 9 octets CS_DRIVE
 //
-void bidib_send_cs_drive(uint16_t dcc_addr, int speed, uint8_t dir, int f[29], uint8_t active) {
- LOG_INFO(TAG,"in bidib_send_cs_drive dcc_addr %02x, speed %02x, dir %02x, active %02x",
-                dcc_addr, speed,dir,  active);  
-gpio_put(BIDIB_PIN_TEST , 1);
-    busy_wait_us_32(6);
-gpio_put(BIDIB_PIN_TEST , 0);
+void bidib_send_cs_drive(uint16_t dcc_addr, int speed, uint8_t dir, t_loco_functions f, uint8_t active) {
+    LOG_INFO(TAG,"in bidib_send_cs_drive dcc_addr %02x, speed %02x, dir %02x, f %02x, active %02x",
+                    dcc_addr, speed,dir, f[29], active);  
+    gpio_put(BIDIB_PIN_TEST , 1);
+        busy_wait_us_32(6);
+    gpio_put(BIDIB_PIN_TEST , 0);
 
-   LOG_INFO(TAG,"g_bidib_connect %02x g_bidib_spontan_enabled %02x ",
-             g_bidib_connect,g_bidib_spontan_enabled);
+  // LOG_INFO(TAG,"g_bidib_connect %02x g_bidib_spontan_enabled %02x ",
+  //           g_bidib_connect,g_bidib_spontan_enabled);
     if (g_bidib_connect != BIDIB_CONNECTED) return;
     if (!g_bidib_spontan_enabled) return;
 

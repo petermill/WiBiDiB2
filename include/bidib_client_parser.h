@@ -16,6 +16,9 @@ extern uint8_t g_bidib_connect;
 extern uint8_t my_bidib_node_addr;
 extern uint8_t g_bidib_backoff;
 
+// Tableau des 29 états de fonctions F0..F28
+typedef int t_loco_functions[29];
+
 // ─── API publique ─────────────────────────────────────────────────────────────
 void init_bidib_client(void);
 void run_bidib_client(void);
@@ -30,7 +33,7 @@ bool send_bidib_message(uint8_t *message);
 // Commande de traction : vitesse + direction + fonctions F0..F28
 // speed = 0..126, ou -1 pour emergency stop
 void bidib_send_cs_drive(uint16_t dcc_addr, int speed, uint8_t dir, 
-    int f[29], uint8_t active);
+    t_loco_functions f, uint8_t active);
 
 // Alimentation voie : on=1 (PPA1), on=0 (PPA0)
 void bidib_send_boost_state(uint8_t on);
