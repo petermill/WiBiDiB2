@@ -176,7 +176,7 @@ static void locoAction(const char *th, char *ak, uint8_t slot) {
     char    tmp[20]     = {};
     char    locoAddress[10] = {};
     
-    LOG_INFO(TAG,"locoAction th=%s ak=%s", th, ak );
+ //   LOG_INFO(TAG,"locoAction th=%s ak=%s", th, ak );
     
     if (Loco[slot].dccAdress == 0) {
         LOG_INFO(TAG, "No loco address assigned for slot 0");
@@ -190,30 +190,76 @@ static void locoAction(const char *th, char *ak, uint8_t slot) {
     }  
 
     // ── F : fonction ──────────────────────────────────────────────────────────
-    if (ak[0] == 'F') {
-        // Format : F<0|1><num>  ex: F10 = F0 on, F110 = F10 on
-        int fstate = ak[1] - '0';               // 0 ou 1
+    // suite à analyse JMRI
+    // Première fois M0A*<;>F14  transmettre M0AS7<;>F14 et M0A*<;>F04  rien faire 
+    // seconde fois  M0A*<;>F14  inverser    M0AS7<;>F04 et M0A*<;>F04  rien faire
+    //
+    //If Button Down char at ‘1’ Toggle state if not do nothing except for F2.
+
+// Function methods in JMRI
+//    protected void handleFunction(String inPackage) {
+//        // get the function # sent from device
+//        int receivedFunction = Integer.parseInt(inPackage.substring(2));
+//        if (inPackage.charAt(1) == '1') { // Function Button down
+//            log.debug("Trying to set function {}", receivedFunction);
+            // Toggle button state:
+//            boolean state = functionThrottle.getFunction(receivedFunction);
+//            functionThrottle.setFunction(receivedFunction, !state);
+//            log.debug("Throttle: {}, Function: {}, set state: {}", functionThrottle.getLocoAddress(), receivedFunction, !state);
+//        } else { // Function Button up
+            //  F2 is momentary for horn, unless prefs are set to follow roster entry
+//            if ((isMomF2) && (receivedFunction==2)) {
+//                functionThrottle.setFunction(2, false);
+//                return;
+//            }
+            // Do nothing if lockable, turn off if momentary
+//            if (functionThrottle.getFunctionMomentary(receivedFunction)) {
+//                functionThrottle.setFunction(receivedFunction, false);
+//                log.debug("Throttle: {}, Momentary Function: {}, set false", functionThrottle.getLocoAddress(), receivedFunction);
+//            }
+//        }
+//    }
+// steve Todd
+//If momentary, the server should set the function state ON when it receives the DOWN, and OFF when it receives the UP.
+//If latching, the server TOGGLEs the state when it receives the DOWN. It ignores the UP.
+//
+// locoduino
+// fKey = actionKey.substring(2).toInt(); // numero de fonction dans la commande
+//    Loco[Throttle].LocoState[fKey] = invert(Loco[Throttle].LocoState[fKey]); // inversion
+// int invert(int value) {
+//  if (value == 0)
+//    return 1;
+//  else
+//    return 0;
+//} 
+
+
+if (ak[0] == 'F') {   
+        // Format : F<0|1><num>  ex: F10 = F0 on, F110 = F10 on       
         int fn     = (int)strtol(ak + 2, NULL, 10);
-        LOG_INFO(TAG, ">>> Loco action, fn: %d, fstate: %d", fn, fstate);
-        
+        LOG_INFO(TAG, "previous fstate Loco[slot].LocoState[fn] %d",Loco[slot].LocoState[fn]);
+        int fstate = ak[1] - '0';               // 0 ou 1              
          Loco[slot].LocoState[fn] = fstate;
-            if (fn != 2) {
+        LOG_INFO(TAG, "query for fstate Loco[slot].LocoState[fn] %d",Loco[slot].LocoState[fn]); 
+          //  if (fn != 2) {
                 // we expect everything other than F2 is lockable
-                if (fstate == 0) {
-                    LOG_INFO(TAG, "Skip fstate = 0 because function is lockable: %d", fn);
+                if (fstate == 1) {
+                    // It ignores the UP.
+                    LOG_INFO(TAG, "Skip fstate = 1 because function is lockable: %d", fn);
                     return;
                 }
                 else {
-                    // toggle the state
+                    // TOGGLEs the state when it receives the DOWN
                     Loco[slot].LocoState[fn] = Loco[slot].LocoState[fn] == 0 ? 1 : 0;
                     fstate = Loco[slot].LocoState[fn];
-                    LOG_INFO(TAG, "Toggled current state because function is lockable: %d, state: %d", fn, fstate);
+                    LOG_INFO(TAG, "Toggled current state fn = %d, state: %d", fn, fstate);
                 }
-            }
-            else {
-                Loco[slot].LocoState[fn] = fstate;
-            }
+           // }
+           // else {
+            //   Loco[slot].LocoState[fn] = fstate;
+            //}
        
+            
         // Renvoyer l'état confirmé au smartphone : M0A<ak><;>F<state><num>
         memset(msg, 0, sizeof(msg));
         msg[0]='M'; length_msg=1;
@@ -233,20 +279,29 @@ static void locoAction(const char *th, char *ak, uint8_t slot) {
         send_msg(pcb, length_msg, msg);
         tcp_output(pcb);
 
-        // Calculer active selon fn
-       // uint8_t active = BIDIB_CS_DRIVE_SPEED_BIT;  // toujours speed
-        uint8_t active = 0;
-        if (fn <= 4)  active |= BIDIB_CS_DRIVE_F0F4_BIT;
-        else if (fn <= 8)  active |= BIDIB_CS_DRIVE_F5F8_BIT;
-        else if (fn <= 12) active |= BIDIB_CS_DRIVE_F9F12_BIT;
-        else if (fn <= 20) active |= BIDIB_CS_DRIVE_F13F20_BIT;
-        else               active |= BIDIB_CS_DRIVE_F21F28_BIT;
 
-        LOG_INFO(TAG,"dccAdress %d  LocoState %02x   Active %02x ",
-            Loco[slot].dccAdress, fstate, active);
+       // if (fstate == 1) 
+        {
+        // TOGGLEs the state when it receives the DOWN; ignore the up
+        // fstate has been toggled
+        
+     //   LOG_INFO(TAG, "Toggled current state fn = %d, state: %d", fn, Loco[slot].LocoState);
 
-        bidib_send_cs_drive(Loco[slot].dccAdress, Loco[slot].newSpeed,
-                Loco[slot].dir, Loco[slot].LocoState, active);
+            // Calculer active selon fn
+        // uint8_t active = BIDIB_CS_DRIVE_SPEED_BIT;  // toujours speed
+            uint8_t active = 0;
+            if (fn <= 4)  active |= BIDIB_CS_DRIVE_F0F4_BIT;
+            else if (fn <= 8)  active |= BIDIB_CS_DRIVE_F5F8_BIT;
+            else if (fn <= 12) active |= BIDIB_CS_DRIVE_F9F12_BIT;
+            else if (fn <= 20) active |= BIDIB_CS_DRIVE_F13F20_BIT;
+            else               active |= BIDIB_CS_DRIVE_F21F28_BIT;
+
+            LOG_INFO(TAG,"dccAdress %d  LocoState %02x   Active %02x ",
+                Loco[slot].dccAdress, Loco[slot].LocoState[fn], active);
+
+            bidib_send_cs_drive(Loco[slot].dccAdress, Loco[slot].newSpeed,
+                    Loco[slot].dir, &Loco[slot].LocoState[0], active);
+            }
         
     }
 

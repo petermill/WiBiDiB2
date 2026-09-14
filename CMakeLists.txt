@@ -41,7 +41,7 @@ pico_sdk_init()
     withrottle_if.c
     # dhcpserver fourni par pico-examples — copier le dossier dhcpserver/ ici
     dhcpserver/dhcpserver.c
-    bidib_client_parser.c
+    fn.c
     bidib_client_if.c
 )
 
