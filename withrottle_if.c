@@ -190,58 +190,19 @@ static void locoAction(const char *th, char *ak, uint8_t slot) {
     }  
 
     // ── F : fonction ──────────────────────────────────────────────────────────
-    // suite à analyse JMRI
-    // Première fois M0A*<;>F14  transmettre M0AS7<;>F14 et M0A*<;>F04  rien faire 
-    // seconde fois  M0A*<;>F14  inverser    M0AS7<;>F04 et M0A*<;>F04  rien faire
-    //
-    //If Button Down char at ‘1’ Toggle state if not do nothing except for F2.
-
-// Function methods in JMRI
-//    protected void handleFunction(String inPackage) {
-//        // get the function # sent from device
-//        int receivedFunction = Integer.parseInt(inPackage.substring(2));
-//        if (inPackage.charAt(1) == '1') { // Function Button down
-//            log.debug("Trying to set function {}", receivedFunction);
-            // Toggle button state:
-//            boolean state = functionThrottle.getFunction(receivedFunction);
-//            functionThrottle.setFunction(receivedFunction, !state);
-//            log.debug("Throttle: {}, Function: {}, set state: {}", functionThrottle.getLocoAddress(), receivedFunction, !state);
-//        } else { // Function Button up
-            //  F2 is momentary for horn, unless prefs are set to follow roster entry
-//            if ((isMomF2) && (receivedFunction==2)) {
-//                functionThrottle.setFunction(2, false);
-//                return;
-//            }
-            // Do nothing if lockable, turn off if momentary
-//            if (functionThrottle.getFunctionMomentary(receivedFunction)) {
-//                functionThrottle.setFunction(receivedFunction, false);
-//                log.debug("Throttle: {}, Momentary Function: {}, set false", functionThrottle.getLocoAddress(), receivedFunction);
-//            }
-//        }
-//    }
-// steve Todd
-//If momentary, the server should set the function state ON when it receives the DOWN, and OFF when it receives the UP.
-//If latching, the server TOGGLEs the state when it receives the DOWN. It ignores the UP.
-//
-// locoduino
-// fKey = actionKey.substring(2).toInt(); // numero de fonction dans la commande
-//    Loco[Throttle].LocoState[fKey] = invert(Loco[Throttle].LocoState[fKey]); // inversion
-// int invert(int value) {
-//  if (value == 0)
-//    return 1;
-//  else
-//    return 0;
-//} 
-
-
+    // steve Todd
+    //If momentary, the server should set the function state ON 
+    // when it receives the DOWN, and OFF when it receives the UP.
+    //If latching, the server TOGGLEs the state when it receives the DOWN. 
+    // It ignores the UP.
+    
 if (ak[0] == 'F') {   
         // Format : F<0|1><num>  ex: F10 = F0 on, F110 = F10 on       
         int fn     = (int)strtol(ak + 2, NULL, 10);
         LOG_INFO(TAG, "previous fstate Loco[slot].LocoState[fn] %d",Loco[slot].LocoState[fn]);
         int fstate = ak[1] - '0';               // 0 ou 1              
-         Loco[slot].LocoState[fn] = fstate;
         LOG_INFO(TAG, "query for fstate Loco[slot].LocoState[fn] %d",Loco[slot].LocoState[fn]); 
-          //  if (fn != 2) {
+           if (fn != 2) {
                 // we expect everything other than F2 is lockable
                 if (fstate == 1) {
                     // It ignores the UP.
@@ -254,10 +215,10 @@ if (ak[0] == 'F') {
                     fstate = Loco[slot].LocoState[fn];
                     LOG_INFO(TAG, "Toggled current state fn = %d, state: %d", fn, fstate);
                 }
-           // }
-           // else {
-            //   Loco[slot].LocoState[fn] = fstate;
-            //}
+            }
+           else {
+               Loco[slot].LocoState[fn] = fstate;
+            }
        
             
         // Renvoyer l'état confirmé au smartphone : M0A<ak><;>F<state><num>
@@ -278,17 +239,8 @@ if (ak[0] == 'F') {
 
         send_msg(pcb, length_msg, msg);
         tcp_output(pcb);
-
-
-       // if (fstate == 1) 
-        {
-        // TOGGLEs the state when it receives the DOWN; ignore the up
-        // fstate has been toggled
-        
-     //   LOG_INFO(TAG, "Toggled current state fn = %d, state: %d", fn, Loco[slot].LocoState);
-
-            // Calculer active selon fn
-        // uint8_t active = BIDIB_CS_DRIVE_SPEED_BIT;  // toujours speed
+              
+        // Calculer active selon fn
             uint8_t active = 0;
             if (fn <= 4)  active |= BIDIB_CS_DRIVE_F0F4_BIT;
             else if (fn <= 8)  active |= BIDIB_CS_DRIVE_F5F8_BIT;
@@ -300,9 +252,7 @@ if (ak[0] == 'F') {
                 Loco[slot].dccAdress, Loco[slot].LocoState[fn], active);
 
             bidib_send_cs_drive(Loco[slot].dccAdress, Loco[slot].newSpeed,
-                    Loco[slot].dir, &Loco[slot].LocoState[0], active);
-            }
-        
+                    Loco[slot].dir, &Loco[slot].LocoState[0], active);        
     }
 
     // ── qV / qR : demande de l'état courant ──────────────────────────────────
@@ -428,7 +378,7 @@ void process_rx_withrottle(rx_data_t *data, uint8_t slot) {
     char actionData[30] = {};
     int  delimiter      = 0;
 
-    LOG_INFO(TAG, "rcv: <- slot %d message: %s", slot, data->msg);
+   // LOG_INFO(TAG, "rcv: <- slot %d message: %s", slot, data->msg);
 
     throttle[slot].state = NODE_LOGGED_ON;
     struct tcp_pcb *pcb  = data->pcb;

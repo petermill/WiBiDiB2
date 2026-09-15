@@ -277,9 +277,9 @@ static bool bidib_guest_req_send(uint8_t msg_type_target,
     for (uint8_t j = 0; j < data_len; j++)
        {
             message[i++] = msg_data[j];
-            printf(" msg_data[%d]=%02x", j, msg_data[j]);
+     //       printf(" msg_data[%d]=%02x", j, msg_data[j]);
        } 
-                    printf(" \n");
+      //              printf(" \n");
 
     return send_bidib_message(message);
 }
