@@ -8,7 +8,7 @@
 #include "lwip/tcp.h"
 
 // Initialisation WiFi AP
-bool wifi_init_softap(void);
+struct netif *wifi_init_softap(void);
 
 // Démarrage du serveur TCP WiThrottle
 bool tcp_server_init(void);

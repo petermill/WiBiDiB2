@@ -19,13 +19,18 @@
 #include "smartphone_if.h"
 #include "bidib_client_parser.h"
 #include "config.h"
+#include "mdns.h"
 
 static const char *TAG = "main";
 
 int main(void)
 {
     stdio_init_all();
-    sleep_ms(3000);  // attendre USB serial
+   // sleep_ms(3000);  // attendre USB serial
+   while (!stdio_usb_connected()) {
+    sleep_ms(100);
+}
+printf("USB connected, starting init...\n");
     LOG_INFO(TAG,"=== WI_BIDIB_ED Pico 2W v0.2 ===");
     stdio_flush();
 
@@ -38,17 +43,24 @@ int main(void)
 
     // ── WiFi AP + TCP WiThrottle ──────────────────────────────────────────────
     smartphone_if_init();   // init table throttle[] + UID BiDiB
-
+/*
     if (!wifi_init_softap()) {
         printf("WiFi AP ERREUR — on continue sans WiFi\n");
         // On ne bloque pas : le BiDiB seul reste fonctionnel
-    } else {
-        if (!tcp_server_init()) {
-            printf("TCP server ERREUR\n");
-        } else {
-            LOG_INFO(TAG,"WiFi AP + TCP OK — SSID:myssid port:5550");
+   */ 
+        struct netif *ap_netif = wifi_init_softap();
+        if (!ap_netif) {
+            printf("WiFi AP ERREUR — on continue sans WiFi\n");
+            } else {
+            if (!tcp_server_init()) {
+                printf("TCP server ERREUR\n");
+            } else {
+                LOG_INFO(TAG,"WiFi AP + TCP OK — SSID:myssid port:5550");
+            }
+             // mDNS : advertise the WiThrottle service → Engine Driver discovery
+              mdns_init(ap_netif);
         }
-    }
+        
 
     printf("Boucle principale\n");
 

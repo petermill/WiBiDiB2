@@ -199,9 +199,9 @@ static void locoAction(const char *th, char *ak, uint8_t slot) {
 if (ak[0] == 'F') {   
         // Format : F<0|1><num>  ex: F10 = F0 on, F110 = F10 on       
         int fn     = (int)strtol(ak + 2, NULL, 10);
-        LOG_INFO(TAG, "previous fstate Loco[slot].LocoState[fn] %d",Loco[slot].LocoState[fn]);
+     //   LOG_INFO(TAG, "previous fstate Loco[slot].LocoState[fn] %d",Loco[slot].LocoState[fn]);
         int fstate = ak[1] - '0';               // 0 ou 1              
-        LOG_INFO(TAG, "query for fstate Loco[slot].LocoState[fn] %d",Loco[slot].LocoState[fn]); 
+     //   LOG_INFO(TAG, "query for fstate Loco[slot].LocoState[fn] %d",Loco[slot].LocoState[fn]); 
            if (fn != 2) {
                 // we expect everything other than F2 is lockable
                 if (fstate == 1) {

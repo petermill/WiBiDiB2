@@ -27,6 +27,7 @@
 #include "withrottle_if.h"
 #include "smartphone_if.h"
 #include "dhcpserver/dhcpserver.h"
+#include "mdns.h"
 
 static const char *TAG = "tcp_server";
 
@@ -35,15 +36,18 @@ static err_t tcp_server_accept_cb(void *arg, struct tcp_pcb *newpcb, err_t err);
 static err_t tcp_server_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err);
 static void  tcp_server_err_cb(void *arg, err_t err);
 
+// Interface réseau active (STA si connecté, sinon AP) — utilisée par mDNS
+static struct netif *g_active_netif;
+
 // ─── Initialisation WiFi AP ───────────────────────────────────────────────────
 //
 // Équivalent de wifi_init_softap() ESP32
 // Le Pico 2W utilise cyw43_arch — démarrage en mode AP
 //
-bool wifi_init_softap(void) {
-   if (cyw43_arch_init()) {
+struct netif *wifi_init_softap(void) {
+    if (cyw43_arch_init()) {
         LOG_ERROR(TAG, "cyw43_arch_init failed");
-        return false;
+        return NULL;
     }
 
     cyw43_arch_enable_ap_mode(WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_WPA2_AES_PSK);
@@ -61,7 +65,7 @@ bool wifi_init_softap(void) {
     dhcp_server_init(&dhcp_server, (ip_addr_t*)&gw, (ip_addr_t*)&mask);
 
     LOG_INFO(TAG, "WiFi AP started. SSID:%s", WIFI_SSID);
-    return true; 
+    return ap_netif;
 }
 
 // ─── Démarrage du serveur TCP ─────────────────────────────────────────────────
@@ -70,6 +74,7 @@ bool wifi_init_softap(void) {
 // Sur Pico lwIP : on crée un pcb en écoute et on enregistre le callback accept
 //
 bool tcp_server_init(void) {
+    LOG_INFO(TAG, "Starting TCP server on port %d", WITHROTTLE_PORT);
     struct tcp_pcb *listen_pcb = tcp_new_ip_type(IPADDR_TYPE_ANY);
     if (!listen_pcb) {
         LOG_ERROR(TAG, "tcp_new failed");
@@ -90,7 +95,11 @@ bool tcp_server_init(void) {
     }
 
     tcp_accept(listen_pcb, tcp_server_accept_cb);
-    LOG_INFO(TAG, "TCP server listening on port %d", WITHROTTLE_PORT);
+    LOG_INFO(TAG, "listening on port %d", WITHROTTLE_PORT);
+
+    // mDNS : advertise the WiThrottle service → Engine Driver discovery
+    // mdns_init(g_active_netif);
+
     return true;
 }
 

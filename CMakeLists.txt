@@ -43,6 +43,7 @@ pico_sdk_init()
     dhcpserver/dhcpserver.c
     bidib_client_if.c
     bidib_client_parser.c
+    mdns.c
 )
 
 # Générer le header C depuis le fichier PIO
@@ -65,6 +66,7 @@ target_link_libraries(WiBiDiB
     hardware_gpio
     pico_unique_id
     pico_cyw43_arch_lwip_poll   # WiFi + lwIP bare-metal
+    pico_lwip_mdns              # répondant mDNS (découverte Engine Driver)
 )
 
 target_include_directories(WiBiDiB PRIVATE
@@ -74,3 +76,7 @@ target_include_directories(WiBiDiB PRIVATE
 )
 
 pico_add_extra_outputs(WiBiDiB)
+# pico_add_extra_outputs() est une fonction fournie par le Pico SDK qui génère, 
+# en plus du binaire principal (.elf), plusieurs formats de sortie supplémentaires 
+# utiles pour le flash et le debug — sans elle, vous n'auriez que le .elf brut
+# dans le dossier build/.
