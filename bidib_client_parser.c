@@ -36,6 +36,7 @@
 #include "config.h"
 #include "crc_8bit.h"
 #include "hardware/timer.h" 
+#include "roster_transfer.h"
 
 static const char *TAG = "bidib_client_parser";
 
@@ -431,6 +432,24 @@ static uint8_t process_bidib_message(uint8_t *bidib_rx_msg) {
             bidib_send_onepara_msg(MSG_SYS_ERROR, 0);
             break;
 
+            case MSG_STRING_SET:   // 1:Nspace, 2:ID, 3:Strsize, 4...n: string
+                if ((length - 3 - addr_depth) >= 3) {
+                    uint8_t ns = msg_type[1];
+                    uint8_t id = msg_type[2];
+                    uint8_t sz = msg_type[3];
+                    uint8_t avail = (length - 3 - addr_depth) - 3;  // octets string dispo
+                    if (sz > avail) sz = avail;
+                    if (ns == BIDIB_STRING_NAMESPACE_NODE_INFO && id == 1) {
+                        // TODO: user_string_store()/bidib_send_string_username() non implémentées
+                        // (fonctionnalité "username" NODE_INFO, à faire avec le collègue)
+                    } else if (ns == BIDIB_STRING_NAMESPACE_ROSTER) {
+                        roster_transfer_handle_chunk(id, &msg_type[4], sz);
+                    } else {
+                        LOG_WARN(TAG, "MSG_STRING_SET ignored (ns=0x%02x id=%u)",
+                                ns, id);
+                    }
+                }
+            break;
         // ── Logon ─────────────────────────────────────────────────────────────
         case MSG_LOGON_ACK:         // 0x70
         // send      0x0B 0A 00 00 F0 80 00 13 BA F1 86 BC 89

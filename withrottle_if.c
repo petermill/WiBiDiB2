@@ -27,6 +27,7 @@
 #include "smartphone_if.h"
 #include "tcp_server.h"
 #include "bidib_client_parser.h"
+//#include "roster.h"
 
 
 static const char *TAG = "withrottle_if";
@@ -62,7 +63,31 @@ void throttle_stop(uint8_t slot) {
     heartbeat[slot]       = 0;
     Loco[slot].newSpeed   = 0;
 }
+/*
+const roster_entry_t * findRosterEntry(int locoAddr) {
+    roster_entry_t *e = NULL;
+    uint8_t loco_index = 0;
 
+    LOG_INFO(TAG, "Fund roster entry for locoAddr: %d", locoAddr);
+
+    while (loco_index < roster.count) {
+        const roster_entry_t *entry = roster_get(loco_index);
+        loco_index++; 
+        if (!entry) { 
+            continue; 
+        }
+
+        // TODO check if short or long addr
+        if (entry->dccAddress == locoAddr) {
+            LOG_INFO(TAG, "Current roster entry: %s", entry->id);
+            return entry;
+        }
+    }
+
+    LOG_INFO(TAG, "No roster entry found for locoAddr: %d", locoAddr);
+    return NULL;
+}
+*/
 // ─── locoAdd() ───────────────────────────────────────────────────────────────
 // Engine Driver uniquement : M0+ / M0L / V0 / R1 / s1
 static void locoAdd(const char *th, const char *ak, uint8_t slot) {
@@ -70,6 +95,8 @@ static void locoAdd(const char *th, const char *ak, uint8_t slot) {
     uint8_t length_msg = 0;
     struct tcp_pcb *pcb = throttle[slot].pcb;
 
+   // const roster_entry_t *e = findRosterEntry(locoAddr);
+   
     memset(msg, 0, sizeof(msg));
     memcpy(Loco[slot].Loco_actionKey, ak, strlen(ak) + 1);
 
@@ -199,6 +226,30 @@ static void locoAction(const char *th, char *ak, uint8_t slot) {
 if (ak[0] == 'F') {   
         // Format : F<0|1><num>  ex: F10 = F0 on, F110 = F10 on       
         int fn     = (int)strtol(ak + 2, NULL, 10);
+  /*     
+        // check if the roster is configured
+        const roster_entry_t *entry = findRosterEntry(Loco[slot].dccAdress);
+        if (entry != NULL && entry->functions[fn].label[0] != '\0') {
+            if (fstate == 0 && entry->functions[fn].lockable) {
+                LOG_INFO(TAG, "Skip fstate = 0 because function is lockable: %d", fn);
+                return;
+            }
+            else {
+                // toggle the state
+                Loco[slot].LocoState[fn] = Loco[slot].LocoState[fn] == 0 ? 1 : 0;
+                fstate = Loco[slot].LocoState[fn];
+                LOG_INFO(TAG, "Toggled current state because function is lockable: %d, state: %d", fn, fstate);
+            }
+        }
+        else {
+            Loco[slot].LocoState[fn] = fstate;
+        }
+
+       
+*/ 
+
+
+
      //   LOG_INFO(TAG, "previous fstate Loco[slot].LocoState[fn] %d",Loco[slot].LocoState[fn]);
         int fstate = ak[1] - '0';               // 0 ou 1              
      //   LOG_INFO(TAG, "query for fstate Loco[slot].LocoState[fn] %d",Loco[slot].LocoState[fn]); 
@@ -372,6 +423,62 @@ static void checkHeartbeat(uint8_t slot) {
         tcp_output(pcb);
     }
 }
+
+/*
+    void send_welcome_message(struct tcp_pcb *pcb) {
+    char buf[128];
+
+    uint8_t rosterCount = roster.count;
+    // const roster_entry_t *e = roster_get(0);
+    uint8_t loco_index = 0;
+
+    LOG_INFO(TAG, "Send welcome message to new client. Roster count: %d", rosterCount);
+
+    // send initial sequence to client
+    tcp_write(pcb, "VN2.0\n", 6,  TCP_WRITE_FLAG_COPY);
+    tcp_write(pcb, "HTWiBiDiB\n", 10, TCP_WRITE_FLAG_COPY);
+    tcp_write(pcb, "HtWiBiDiB v1.0\n", 15, TCP_WRITE_FLAG_COPY);
+
+    // The roster list is dynamically configurable
+
+    log_snprintf(buf, sizeof(buf),
+            "RL");
+    tcp_write(pcb, buf, (u16_t)strlen(buf), TCP_WRITE_FLAG_COPY);
+
+    while (loco_index < rosterCount) {
+        const roster_entry_t *entry = roster_get(loco_index);
+        loco_index++; 
+
+        if (!entry) { 
+            continue; 
+        }
+
+        LOG_INFO(TAG, "Current roster.id: %s", entry->id);
+
+        // prepare data of current roster entry
+        log_snprintf(buf, sizeof(buf),
+                "%d]\\[%s}|{%d}|{%s",
+            rosterCount, entry->id, entry->dccAddress, entry->longAddress ? "L" : "S");
+
+        tcp_write(pcb, buf, (u16_t)strlen(buf), TCP_WRITE_FLAG_COPY);
+
+        if (loco_index < roster.count) {
+            log_snprintf(buf, sizeof(buf),
+                    "]\\[");
+            tcp_write(pcb, buf, (u16_t)strlen(buf), TCP_WRITE_FLAG_COPY);
+        }
+    }
+    log_snprintf(buf, sizeof(buf),
+            "\n");
+    tcp_write(pcb, buf, (u16_t)strlen(buf), TCP_WRITE_FLAG_COPY);
+
+    // tcp_write(pcb, "RLRL1]\[BR 185 203-1}|{3}|{S\n",   4,  TCP_WRITE_FLAG_COPY);
+    tcp_write(pcb, "PW" HTTP_ROSTER_PORT_STR "\n", 7, TCP_WRITE_FLAG_COPY);
+    tcp_write(pcb, "PPA2\n",  5,  TCP_WRITE_FLAG_COPY);
+    tcp_output(pcb);
+
+}
+*/
 
 // ─── process_rx_withrottle() ─────────────────────────────────────────────────
 void process_rx_withrottle(rx_data_t *data, uint8_t slot) {
