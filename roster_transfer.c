@@ -78,7 +78,7 @@ static void send_string_echo(uint8_t ns, uint8_t id, const uint8_t *data, uint8_
     message[5] = id;
     message[6] = sz;
     memcpy(&message[7], data, sz);
-
+LOG_INFO(TAG, "send_string_echo: plength=%u, ns=%u, id=%u, size=%u", message[0], message[4], message[5], message[6]);
     send_bidib_message(message);
 }
 

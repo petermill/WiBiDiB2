@@ -103,18 +103,22 @@ static uint8_t bidib_build_header(uint8_t *buf, uint8_t msg_type, uint8_t nb_dat
 // ─── send_bidib_message() ────────────────────────────────────────────────────
 // Point d'entrée unique pour envoyer un message BiDiB
 // Identique Atmel — délègue à bidib_tx_fifo_put()
-
 bool send_bidib_message(uint8_t *message) {
-    
-     gpio_put(BIDIB_PIN_TEST , 1);
+#define DEBUG  1    
+    gpio_put(BIDIB_PIN_TEST , 1);
     busy_wait_us_32(2);
     gpio_put(BIDIB_PIN_TEST , 0);
     
-LOG_INFO(TAG, " in send_bidib_message mg%s ", *message);
+   #if (DEBUG == 1)
+    uint8_t total = message[0] + 1;   // PLENGTH + l'octet PLENGTH lui-meme
+    printf("[send_bidib_message] ");
+    for (uint8_t k = 0; k < total; k++) {
+        printf("%02X ", message[k]);
+    }
+    printf("\n");
+   #endif
 
     return bidib_tx_fifo_put(message);
-    
-   // return bidib_tx_fifo_put(message);
 }
 
 // ─── Messages système de base ────────────────────────────────────────────────

@@ -40,7 +40,21 @@ extern volatile uint8_t g_bidib_guest_enabled;
 // ─────────────────────────────────────────────────
 // UID
 // ─────────────────────────────────────────────────
-#define BIDIB_UID_CLASS     0x00
+/*
+struct
+          {
+            uint8_t class_switch: 1;
+            uint8_t class_booster: 1;
+            uint8_t class_accessory: 1;
+            uint8_t class_dcc_prog: 1;
+            uint8_t class_dcc_main: 1;
+            uint8_t class_ui: 1;
+            uint8_t class_occupancy: 1;
+            uint8_t class_bridge: 1;
+          };
+*/
+
+#define BIDIB_UID_CLASS     0x80 //  0x00  class bridge pour test 
 #define BIDIB_UID_CLASSX    0x01
 #define BIDIB_UID_VID       0x13
 extern const uint8_t MyUniqueID[7];
