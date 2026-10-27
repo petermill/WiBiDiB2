@@ -33,6 +33,7 @@
 #define LOG_WARN(tag, fmt, ...)   printf("[W] %s: " fmt "\n", tag, ##__VA_ARGS__)
 #define LOG_ERROR(tag, fmt, ...)  printf("[E] %s: " fmt "\n", tag, ##__VA_ARGS__)
 
+#define DEBUG  1  
 // ─── Distributed control ────────────────────────────────────────────────────────
 #define BIDIB_DISTRIBUTED_CONTROL  1
 

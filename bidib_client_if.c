@@ -162,10 +162,11 @@ bool bidib_tx_fifo_put(uint8_t *new_message) {
     uint8_t total = size + 1;  // size + message
 
   #if (DEBUG == 1)  
-    static uint8_t call_count = 0;
+/*    static uint8_t call_count = 0;
     call_count++;
     LOG_INFO(TAG,"[tx_put#%d] read=%d write=%d ahead=%d size=%d",
-        call_count, bidib_tx_buf_read, bidib_tx_buf_write, bidib_tx_ahead, size);   
+        call_count, bidib_tx_buf_read, bidib_tx_buf_write, bidib_tx_ahead, size); 
+     */ 
 #endif
     uint32_t s = bidib_enter_critical();
 gpio_put(BIDIB_PIN_TEST , 1);
@@ -222,7 +223,7 @@ void bidib_prepare_tx_logon(void) {
         crc = crc8_update(crc, bidib_tx_buf[i]);
     bidib_tx_buf[idx++] = crc;
 #if (DEBUG == 1)
-    LOG_INFO(TAG,"Logon prepared, crc=0x%02X, total=%d bytes",crc, idx);)
+    LOG_INFO(TAG,"Logon prepared, crc=0x%02X, total=%d bytes",crc, idx);
 #endif
 }
 

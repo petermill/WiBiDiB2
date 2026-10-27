@@ -47,6 +47,7 @@ uint8_t g_bidib_backoff  = 0;
 uint8_t my_bidib_node_addr = 0xFF;
 uint8_t my_addr_stack[4] = {0, 0, 0, 0};
 uint8_t my_addr_depth    = 0;
+uint32_t subscribe_sent_ms = 0;  // timestamp du dernier MSG_GUEST_REQ_SUBSCRIBE envoyé (ms)
 
 volatile uint8_t g_bidib_guest_enabled = 0;
 static bool guest_subscribed = false;
@@ -104,7 +105,7 @@ static uint8_t bidib_build_header(uint8_t *buf, uint8_t msg_type, uint8_t nb_dat
 // Point d'entrée unique pour envoyer un message BiDiB
 // Identique Atmel — délègue à bidib_tx_fifo_put()
 bool send_bidib_message(uint8_t *message) {
-#define DEBUG  1    
+   
     gpio_put(BIDIB_PIN_TEST , 1);
     busy_wait_us_32(2);
     gpio_put(BIDIB_PIN_TEST , 0);
@@ -132,7 +133,7 @@ static void bidib_send_sys_magic(void) {
   //  message.header.size = my_addr_depth + 1 + 1 + 1 + 2; // addr + term + index + type + data
  #if (DEBUG == 1)
   uint8_t *p = (uint8_t *)&message;
-    printf("magic raw: %02X %02X %02X %02X %02X %02X %02X %02X\n",
+    printf("MSG_SYS_MAGIC: %02X %02X %02X %02X %02X %02X %02X %02X\n",
         p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
  # endif
     send_bidib_message((uint8_t *)&message);
@@ -221,6 +222,12 @@ bool bidib_send_onepara_msg(uint8_t msg_type, uint8_t dat) {
     message[i++]= dat;
     return send_bidib_message((uint8_t *)&message);
 }
+static bool s_bidib_ready = false;
+
+bool bidib_is_ready(void)
+{
+    return s_bidib_ready;
+}
 
 // ─── set_bidib_state() ───────────────────────────────────────────────────────
 // Gestion de l'état de connexion BiDiB
@@ -239,9 +246,13 @@ void set_bidib_state(uint8_t neu, uint8_t assigned_addr) {
         case BIDIB_DISCONNECTED:
             my_bidib_node_addr     = 0xFF;
             g_bidib_spontan_enabled = false;
+            subscribe_sent_ms = 0;
+            guest_subscribed = false;
+            g_bidib_guest_enabled = 0;
             bidib_flush_rx();
             bidib_flush_tx();
             bidib_rx_state = BIDIB_IDLE;
+            s_bidib_ready = false;
             #if (DEBUG == 1)
             LOG_INFO(TAG," DISCONNECTED");
             #endif
@@ -257,6 +268,7 @@ void set_bidib_state(uint8_t neu, uint8_t assigned_addr) {
             my_bidib_node_addr = assigned_addr;
             bidib_rx_msg_num = 0;
             bidib_tx0_msg_num = 0;
+            g_bidib_backoff = 0;
             last_poll_us = time_us_64();  // ← initialiser ici
             break;
 
@@ -276,7 +288,7 @@ static bool bidib_guest_req_send(uint8_t msg_type_target,
                                   uint8_t *msg_data,
                                   uint8_t data_len) {
     uint8_t message[32];
-    uint8_t i = bidib_build_header(message, MSG_GUEST_REQ_SEND, 3 + data_len);
+    uint8_t i = bidib_build_header(message, MSG_GUEST_REQ_SEND, 2 + data_len);
     message[i++] = target_mode;      // TARGET_MODE
     message[i++] = msg_type_target;  // type du message cible (ex: MSG_CS_DRIVE)
     for (uint8_t j = 0; j < data_len; j++)
@@ -308,7 +320,7 @@ static void bidib_guest_req_subscribe(uint8_t target_mode, uint16_t subscription
 // Identique Atmel — simplifié pour WiBiDiB (pas de CLASS_OCCUPANCY, etc.)
 
 static uint8_t process_bidib_message(uint8_t *bidib_rx_msg) {
-   uint8_t  length;
+    uint8_t  length;
     uint8_t *msg_type;
     uint8_t  addr_stack[4] = {0, 0, 0, 0};  // pile d'adresses extraite
     uint8_t  addr_depth = 0;                 // nombre de niveaux
@@ -352,7 +364,7 @@ static uint8_t process_bidib_message(uint8_t *bidib_rx_msg) {
     msg_type = bidib_rx_msg;
 
     #if (DEBUG == 1)
-    LOG_INFO(TAG,"rx msg type=0x%02X addr=[%d]",*msg_type, addr_stack[0]);
+    LOG_INFO(TAG,"rx msg type=0x%02X addr-stack=[%d]",*msg_type, addr_stack[0]);
     #endif
 
     switch (*msg_type) {
@@ -403,23 +415,26 @@ static uint8_t process_bidib_message(uint8_t *bidib_rx_msg) {
             if (g_bidib_connect == BIDIB_CONNECTED) {
                 g_bidib_spontan_enabled = true;
                 printf("[bidib_parser] SYS_ENABLE → guest mode ON\n");
-                #if (BIDIB_DISTRIBUTED_CONTROL == 1)
-            printf("[bidib_parser] guest_subscribed = %s\n", guest_subscribed ? "true" : "false");   
-            if (!guest_subscribed) {
-                printf("[bidib_parser] sending SUBSCRIBE DCCGEN\n");
-            bidib_guest_req_subscribe(BIDIB_TARGET_MODE_DCCGEN, 
-                    SUBSCRIPTION_TRACK_SIGNAL);
-           // printf("[bidib_parser] sending SUBSCRIBE BOOSTER\n");
-           // bidib_guest_req_subscribe(BIDIB_TARGET_MODE_BOOSTER, 
-            //                    SUBSCRIPTION_BOOSTER);
-             //   guest_subscribed = true;
-        }
-        #endif
+            #if (BIDIB_DISTRIBUTED_CONTROL == 1)
+                // un seul SUBSCRIBE par connexion (SYS_ENABLE arrive en broadcast
+                // puis adresse) ; guest_subscribed est remis a faux au LOGON_ACK,
+                // a la deconnexion et si la souscription est refusee.
+                if (!guest_subscribed) {
+                    guest_subscribed = true;
+                    subscribe_sent_ms = now_ms();
+                    printf("[bidib_parser] sending SUBSCRIBE DCCGEN\n");
+                    bidib_guest_req_subscribe(BIDIB_TARGET_MODE_DCCGEN,
+                                              SUBSCRIPTION_TRACK_SIGNAL);
+                }
+                #endif
             }
             break;
 
         case MSG_SYS_DISABLE:
             g_bidib_spontan_enabled = false;
+            guest_subscribed        = false;   /* le CS repart : on devra re-souscrire */
+            g_bidib_guest_enabled   = 0;
+            s_bidib_ready           = false;
             printf("[bidib_parser] SYS_DISABLE → guest mode OFF\n");
             break;
 
@@ -454,6 +469,11 @@ static uint8_t process_bidib_message(uint8_t *bidib_rx_msg) {
                     }
                 }
             break;
+
+            case MSG_SYS_CLOCK: // 0x18           
+                printf("[bidib_parser] SYS_CLOCK received \n");
+            break;
+
         // ── Logon ─────────────────────────────────────────────────────────────
         case MSG_LOGON_ACK:         // 0x70
         // send      0x0B 0A 00 00 F0 80 00 13 BA F1 86 BC 89
@@ -482,12 +502,27 @@ static uint8_t process_bidib_message(uint8_t *bidib_rx_msg) {
             }
             break;
 
-        case MSG_LOGON_REJECTED:
+      
+
+          case MSG_LOCAL_LOGOFF:  // 0x71
             if (memcmp(msg_type + 1, MyUniqueID, 7) == 0) {
-                set_bidib_state(BIDIB_REJECTED, 0);
+                LOG_INFO(TAG,"[bidib_parser] LOCAL_LOGOFF received");
+                set_bidib_state(BIDIB_DISCONNECTED, 0);
             }
             break;
 
+            case MSG_LOCAL_LOGON:  // 0x70
+                if (memcmp(msg_type + 1, MyUniqueID, 7) == 0) {
+                LOG_INFO(TAG,"[bidib_parser] LOCAL_LOGON received");
+                set_bidib_state(BIDIB_CONNECTED, my_addr_stack[0]);
+               }
+            break;
+
+            case MSG_LOGON_REJECTED: // 0x72
+                LOG_INFO(TAG,"[bidib_parser] LOGON_REJECTED received");
+                set_bidib_state(BIDIB_REJECTED, 0);
+            break;
+            
         // ── Distributed Control — réponses de l'IF2 ou Central Station ──────────────────────────
         case MSG_GUEST_RESP_SUBSCRIPTION_COUNT:   // 0x50
         {
@@ -555,22 +590,24 @@ static uint8_t process_bidib_message(uint8_t *bidib_rx_msg) {
                     g_bidib_guest_enabled = 1;
                     if (targetMode == BIDIB_TARGET_MODE_DCCGEN) {
                         printf("[bidib_parser] DCCGEN subscription confirmed → CS_DRIVE enabled\n");
+                        s_bidib_ready = true;
                         //memcpy(g_dccgen_target_uid, target_uid, 5);  // à stocker pour usage futur si besoin
                         memcpy(guest_targets.dccgen_uid, target_uid, 5);
                     } else if (targetMode == BIDIB_TARGET_MODE_BOOSTER) {
                         printf("[bidib_parser] BOOSTER subscription confirmed → BOOST_ON enabled\n");
+                        s_bidib_ready = true;
                         memcpy(guest_targets.booster_uid, target_uid, 5);
                         //memcpy(g_booster_target_uid, target_uid, 5);
                     }
                 } else {
                     printf("[bidib_parser] guest subscription REFUSED (result=0x%02X)\n", result);
+                    guest_subscribed = false;   // permet de re-souscrire au prochain SYS_ENABLE
                 }
          
             }
             break;
         // ── Messages non gérés ────────────────────────────────────────────────
-        case MSG_SYS_CLOCK:   // 0x18
-            break;
+        
         case MSG_LOCAL_SYNC:  // 0x74
             break;
 
@@ -592,7 +629,7 @@ static void bidib_parser(void) {
     busy_wait_us_32(8);
     gpio_put(BIDIB_PIN_TEST , 0);
  #if (DEBUG == 1)
-    printf("[bidib_parser] parsing packet, total=%d\n", bidib_rx_total);
+   // printf("[bidib_parser] parsing packet, total=%d\n", bidib_rx_total);
 #endif
     while (bidib_rx_index < bidib_rx_total) {
         uint8_t consumed = process_bidib_message(
@@ -607,7 +644,6 @@ static void bidib_parser(void) {
 // Équivalent de la t_cr_task Atmel — sans cortos
 
 void run_bidib_client(void) {
-  
   // -- 1. Check connected
   // utilisez now_ms() pour le test de timeout, et pas time_us_64() directement pour éviter overflow
     if (g_bidib_connect == BIDIB_CONNECTED) {
@@ -625,6 +661,7 @@ void run_bidib_client(void) {
     // ── 2. Lecture du buffer RX et assemblage des paquets ────────────────────
     while (bidib_rx_ready()) {
         uint16_t raw    = bidib_rx_read();
+                                     // ← seconde insertion : compte chaque octet reçu pour le heartbeat
         uint8_t  byte   = (uint8_t)(raw & 0xFF);
         uint8_t  id_bit = (uint8_t)((raw >> 8) & 0x01);
 
@@ -662,13 +699,14 @@ void run_bidib_client(void) {
                 if (bidib_rx_index <= bidib_rx_paket[0]) {
                     // Octet de données
                     if (bidib_rx_index < 64) {
-                        bidib_rx_paket[bidib_rx_index] = byte;
+                        bidib_rx_paket[bidib_rx_index] = byte;                        
                         #if (DEBUG == 1)
                             printf("%02x ", byte);
                         #endif
                     }
                     bidib_rx_crc = crc8_update(bidib_rx_crc, byte);
                     bidib_rx_index++;
+                   
 // login P_LENGTH M_LENGTH 0x00 0x00 MSG_LOCAL_LOGON UNIQUE_ID CRC8
 // P_LENGTH packet length, M_LENGTH message length
 // In this case, UNIQUE_ID is 7 bytes  long, thus resulting in M_LENGTH of 10 and P_LENGTH of 11. 
@@ -683,6 +721,7 @@ void run_bidib_client(void) {
                     // En fin de paquet valide, crc8_update(crc_courant, CRC_reçu) == 0
                     uint8_t final_crc = crc8_update(bidib_rx_crc, byte);
                     if (final_crc == 0) {
+                        printf("\n");
                         bidib_parser();
                     } else {
                         printf("[bidib_parser] CRC error! expected=0x%02X got=0x%02X byte=0x%02X\n",
@@ -733,16 +772,16 @@ void init_bidib_client(void) {
 //   [REQ_DATA...]         ← les 9 octets CS_DRIVE
 //
 void bidib_send_cs_drive(uint16_t dcc_addr, int speed, uint8_t dir, t_loco_functions f, uint8_t active) {
-    LOG_INFO(TAG,"in bidib_send_cs_drive dcc_addr %02x, speed %02x, dir %02x, f %02x, active %02x",
-                    dcc_addr, speed,dir, f[29], active);  
+    LOG_INFO(TAG, "cs_drive IN: addr=%u speed=%d dir=%u active=%u F0=%u",
+         dcc_addr, speed, dir, active, f[0] ? 1 : 0);
     gpio_put(BIDIB_PIN_TEST , 1);
         busy_wait_us_32(6);
     gpio_put(BIDIB_PIN_TEST , 0);
 
   // LOG_INFO(TAG,"g_bidib_connect %02x g_bidib_spontan_enabled %02x ",
   //           g_bidib_connect,g_bidib_spontan_enabled);
-    if (g_bidib_connect != BIDIB_CONNECTED) return;
-    if (!g_bidib_spontan_enabled) return;
+    if (g_bidib_connect != BIDIB_CONNECTED) { LOG_INFO(TAG, "cs_drive DROP: pas connecte"); return; }
+    if (!g_bidib_spontan_enabled)          { LOG_INFO(TAG, "cs_drive DROP: SYS_ENABLE pas reçu"); return; }
 
     t_bidib_cs_drive drive;
     drive.addr    = dcc_addr;
@@ -756,8 +795,14 @@ void bidib_send_cs_drive(uint16_t dcc_addr, int speed, uint8_t dir, t_loco_funct
                    |(f[17]?0x10:0)|(f[18]?0x20:0)|(f[19]?0x40:0)|(f[20]?0x80:0);
     drive.f28_f21 = (f[21]?0x01:0)|(f[22]?0x02:0)|(f[23]?0x04:0)|(f[24]?0x08:0)
                    |(f[25]?0x10:0)|(f[26]?0x20:0)|(f[27]?0x40:0)|(f[28]?0x80:0);
-                 
-
+    #if (DEBUG == 1) 
+    LOG_INFO(TAG, "cs_drive OUT: addr=%u fmt=%02x act=%02x spd=%02x(%s %u) "
+              "f4_0=%02x f12_5=%02x f20_13=%02x f28_21=%02x sizeof=%u",
+         drive.addr, drive.format, drive.active, drive.speed,
+         (drive.speed & 0x80) ? "AV" : "AR", drive.speed & 0x7F,
+         drive.f4_f0, drive.f12_f5, drive.f20_f13, drive.f28_f21,
+         (unsigned)sizeof(t_bidib_cs_drive));            
+    #endif
 #if (BIDIB_DISTRIBUTED_CONTROL == 1)
     if (!g_bidib_guest_enabled) {
         printf("[cs_drive] guest not subscribed yet — drop\n");

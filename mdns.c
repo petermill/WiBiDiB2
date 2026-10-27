@@ -51,7 +51,7 @@ bool mdns_init(struct netif *ap_netif) {
     s8_t slot = mdns_resp_add_service(ap_netif, MDNS_INSTANCE,
                                        MDNS_SERVICE, MDNS_PROTO,
                                        WITHROTTLE_PORT, NULL, NULL);
-    LOG_INFO(TAG, "slot %d instance %s service %s proto %s port %s",
+    LOG_INFO(TAG, "slot %d instance %s service %s proto %s port %u",
              slot, MDNS_INSTANCE, MDNS_SERVICE, MDNS_PROTO,
              WITHROTTLE_PORT);
     if (slot < 0) {

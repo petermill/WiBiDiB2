@@ -27,7 +27,7 @@
 #include "smartphone_if.h"
 #include "tcp_server.h"
 #include "bidib_client_parser.h"
-//#include "roster.h"
+#include "roster.h"
 
 
 static const char *TAG = "withrottle_if";
@@ -42,6 +42,8 @@ typedef struct {
     int     oldSpeed;
     uint8_t dir;                // 1=avant, 0=arrière
     uint8_t slot;
+    bool    longAddr;           // true si actionKey 'L'
+    char    th[3];              // id du throttle ED (ex: "0", "6")
 } Engine_t;
 
 static Engine_t Loco[MAX_THROTTLES];
@@ -52,7 +54,8 @@ static uint32_t  heartbeat[MAX_THROTTLES];
 
 // Variables de parsing
 static char    LocoAdress_g[14];
-static char    actionKey_g[14];
+static char    actionKey_g[48];   // texte apres <;> (action, ou id roster 'E...' jusqu'a 31 car.)
+static char    locoKey_g[16];     // cle de loco avant <;> ex: "L4528" / "S8"
 static int     Throttle_g = 0;
 
 // ─── throttle_stop() ─────────────────────────────────────────────────────────
@@ -63,64 +66,66 @@ void throttle_stop(uint8_t slot) {
     heartbeat[slot]       = 0;
     Loco[slot].newSpeed   = 0;
 }
-/*
-const roster_entry_t * findRosterEntry(int locoAddr) {
-    roster_entry_t *e = NULL;
-    uint8_t loco_index = 0;
 
-    LOG_INFO(TAG, "Fund roster entry for locoAddr: %d", locoAddr);
-
-    while (loco_index < roster.count) {
-        const roster_entry_t *entry = roster_get(loco_index);
-        loco_index++; 
-        if (!entry) { 
-            continue; 
-        }
-
-        // TODO check if short or long addr
-        if (entry->dccAddress == locoAddr) {
-            LOG_INFO(TAG, "Current roster entry: %s", entry->id);
-            return entry;
-        }
+// Recherche dans le roster : adresse + type (court/long).
+static const roster_entry_t *find_entry(int locoAddr, bool isLong) {
+    for (uint8_t i = 0; i < roster.count; i++) {
+        const roster_entry_t *e = roster_get(i);
+        if (e && e->dccAddress == locoAddr && (bool)e->longAddress == isLong)
+            return e;
     }
-
-    LOG_INFO(TAG, "No roster entry found for locoAddr: %d", locoAddr);
     return NULL;
 }
-*/
+
+// Compatibilite avec l'ancien appel (adresse seule) : <=127 => courte
+const roster_entry_t * findRosterEntry(int locoAddr) {
+    return find_entry(locoAddr, locoAddr > 127);
+}
+
 // ─── locoAdd() ───────────────────────────────────────────────────────────────
 // Engine Driver uniquement : M0+ / M0L / V0 / R1 / s1
-static void locoAdd(const char *th, const char *ak, uint8_t slot) {
+static void locoAdd(const char *th, const char *ak, const char *ref, uint8_t slot) {
     char    msg[128];
     uint8_t length_msg = 0;
     struct tcp_pcb *pcb = throttle[slot].pcb;
 
-   // const roster_entry_t *e = findRosterEntry(locoAddr);
-   
+    const roster_entry_t *e = find_entry(Loco[slot].dccAdress, Loco[slot].longAddr);
+    LOG_INFO(TAG, "locoAdd dcc=%d %c -> roster %s", Loco[slot].dccAdress,
+             Loco[slot].longAddr ? 'L' : 'S', e ? e->id : "(absent)");
+
+    // 1 seule loco par slot : liberer la precedente cote ED avant d'en prendre une autre
+    if (Loco[slot].Loco_actionKey[0] != '\0' && strcmp(Loco[slot].Loco_actionKey, ak) != 0) {
+        int n = snprintf(msg, sizeof(msg), "M%s-%s<;>\n\n", th, Loco[slot].Loco_actionKey);
+        send_msg(pcb, n, msg);
+        LOG_INFO(TAG, "release previous %s", Loco[slot].Loco_actionKey);
+    }
     memset(msg, 0, sizeof(msg));
     memcpy(Loco[slot].Loco_actionKey, ak, strlen(ak) + 1);
 
-    // M0+<ak><;>\n\n
-    msg[0]='M'; msg[1]='0'; msg[2]='+'; length_msg=3;
-    memcpy(msg+length_msg, ak, strlen(ak)); length_msg += strlen(ak);
-    msg[length_msg++]='<'; msg[length_msg++]=';'; msg[length_msg++]='>';
-    msg[length_msg++]='\n'; msg[length_msg++]='\n';
+    // M<th>+<cle><;><ref>\n\n  -- ED attend sa propre cle (ex L4528) puis l'id roster (ex E4528)
+    strncpy(Loco[slot].th, th, sizeof(Loco[slot].th) - 1);
+    length_msg = (uint8_t)snprintf(msg, sizeof(msg), "M%s+%s<;>%s\n\n", th, ak, ref);
     send_msg(pcb, length_msg, msg);
 
-    // M0L<ak><;>]\[Feux]\[]\[]\[]...\[\n\n
-    memset(msg, 0, sizeof(msg));
-    msg[0]='M'; msg[1]='0'; msg[2]='L'; length_msg=3;
-    memcpy(msg+length_msg, ak, strlen(ak)); length_msg += strlen(ak);
-    msg[length_msg++]='<'; msg[length_msg++]=';'; msg[length_msg++]='>';
-    msg[length_msg++]=']'; msg[length_msg++]='\\'; msg[length_msg++]='[';
-    msg[length_msg++]='F'; msg[length_msg++]='e'; msg[length_msg++]='u';
-    msg[length_msg++]='x'; msg[length_msg++]=']';
-    for (uint8_t c = 0; c < 27; c++) {
-        msg[length_msg++]='\\'; msg[length_msg++]='['; msg[length_msg++]=']';
+    // M<th>L<cle><;>]\[F0]\[F1]\[...]\[F28\n\n  (29 libelles ; vide = fonction masquee)
+    {
+        static char lbl[29 * (ROSTER_STRING_MAX + 3) + 64];
+        size_t n = 0;
+        n += snprintf(lbl + n, sizeof(lbl) - n, "M%sL%s<;>", th, ak);
+        for (int f = 0; f < 29; f++) {
+            const char *lab = "";
+            if (e) {
+                if (f <= ROSTER_FUNC_MAX && e->functions[f].visible)
+                    lab = e->functions[f].label;
+            } else if (f == 0) {
+                lab = "Feux";            // pas de roster : comportement d'origine
+            }
+            n += snprintf(lbl + n, sizeof(lbl) - n, "]\\[%s", lab);
+            if (n >= sizeof(lbl) - 4) break;
+        }
+        n += snprintf(lbl + n, sizeof(lbl) - n, "\n\n");
+        send_msg(pcb, (int)n, lbl);
     }
-    msg[length_msg++]='\\'; msg[length_msg++]='[';
-    msg[length_msg++]='\n'; msg[length_msg++]='\n';
-    send_msg(pcb, length_msg, msg);
 
     // RAZ état locos en mémoire
     for (int fk = 0; fk < 29; fk++) Loco[slot].LocoState[fk] = 0;
@@ -164,7 +169,7 @@ static void locoAdd(const char *th, const char *ak, uint8_t slot) {
     send_msg(pcb, length_msg, msg);
 
     tcp_output(pcb);
-    LOG_INFO(TAG," loco_wi_+  th=%s ak=%s dcc=%d slot=%d", th, actionKey_g,Loco[slot].dccAdress, slot );
+    LOG_INFO(TAG," loco_wi_+  th=%s ak=%s dcc=%d slot=%d", th, ak,Loco[slot].dccAdress, slot );
 }
 
 // ─── locoRelease() ───────────────────────────────────────────────────────────
@@ -193,6 +198,7 @@ static void locoRelease(const char *th, const char *ak, uint8_t slot) {
     msg[length_msg++]='\n'; msg[length_msg++]='\n';
     send_msg(pcb, length_msg, msg);
     tcp_output(pcb);
+    Loco[slot].Loco_actionKey[0] = '\0';   // libere : plus de 'release previous' au prochain M+
 }
 
 // ─── locoAction() ────────────────────────────────────────────────────────────
@@ -223,32 +229,31 @@ static void locoAction(const char *th, char *ak, uint8_t slot) {
     //If latching, the server TOGGLEs the state when it receives the DOWN. 
     // It ignores the UP.
     
-if (ak[0] == 'F') {   
-        // Format : F<0|1><num>  ex: F10 = F0 on, F110 = F10 on       
+if (ak[0] == 'F') {
+        // Format : F<0|1><num>  ex: F10 = F0 on, F110 = F10 on
+        int fstate = ak[1] - '0';                       // 1=DOWN, 0=UP
         int fn     = (int)strtol(ak + 2, NULL, 10);
-  /*     
-        // check if the roster is configured
-        const roster_entry_t *entry = findRosterEntry(Loco[slot].dccAdress);
-        if (entry != NULL && entry->functions[fn].label[0] != '\0') {
-            if (fstate == 0 && entry->functions[fn].lockable) {
-                LOG_INFO(TAG, "Skip fstate = 0 because function is lockable: %d", fn);
+        if (fn < 0 || fn > 28) return;
+
+        const roster_entry_t *entry = find_entry(Loco[slot].dccAdress, Loco[slot].longAddr);
+        bool known    = entry && fn <= ROSTER_FUNC_MAX && entry->functions[fn].label[0] != '\0';
+        bool lockable = known ? entry->functions[fn].lockable : (fn != 2); // sans roster : tout sauf F2
+
+        if (lockable) {
+            if (fstate == 0) {                          // UP ignore pour une fonction a bascule
                 return;
             }
-            else {
-                // toggle the state
-                Loco[slot].LocoState[fn] = Loco[slot].LocoState[fn] == 0 ? 1 : 0;
-                fstate = Loco[slot].LocoState[fn];
-                LOG_INFO(TAG, "Toggled current state because function is lockable: %d, state: %d", fn, fstate);
-            }
+            Loco[slot].LocoState[fn] = Loco[slot].LocoState[fn] ? 0 : 1;   // DOWN => toggle
+        } else {
+            Loco[slot].LocoState[fn] = fstate;          // momentanee : suit DOWN/UP
         }
-        else {
-            Loco[slot].LocoState[fn] = fstate;
-        }
+        fstate = Loco[slot].LocoState[fn];
+        LOG_INFO(TAG, "F%d lockable=%d state=%d", fn, lockable, fstate);
 
        
-*/ 
 
 
+/* previous version sans roster
 
      //   LOG_INFO(TAG, "previous fstate Loco[slot].LocoState[fn] %d",Loco[slot].LocoState[fn]);
         int fstate = ak[1] - '0';               // 0 ou 1              
@@ -270,7 +275,7 @@ if (ak[0] == 'F') {
            else {
                Loco[slot].LocoState[fn] = fstate;
             }
-       
+       */
             
         // Renvoyer l'état confirmé au smartphone : M0A<ak><;>F<state><num>
         memset(msg, 0, sizeof(msg));
@@ -412,7 +417,9 @@ static void checkHeartbeat(uint8_t slot) {
 
         // Envoyer V0 emergency
         memset(msg, 0, sizeof(msg));
-        msg[0]='M'; msg[1]='0'; msg[2]='A'; length_msg=3;
+        msg[0]='M'; length_msg=1;
+        memcpy(msg+length_msg, Loco[slot].th, strlen(Loco[slot].th)); length_msg += strlen(Loco[slot].th);
+        msg[length_msg++]='A';
         memcpy(msg+length_msg, Loco[slot].Loco_actionKey,
                strlen(Loco[slot].Loco_actionKey));
         length_msg += strlen(Loco[slot].Loco_actionKey);
@@ -424,61 +431,50 @@ static void checkHeartbeat(uint8_t slot) {
     }
 }
 
-/*
-    void send_welcome_message(struct tcp_pcb *pcb) {
-    char buf[128];
 
-    uint8_t rosterCount = roster.count;
-    // const roster_entry_t *e = roster_get(0);
-    uint8_t loco_index = 0;
-
-    LOG_INFO(TAG, "Send welcome message to new client. Roster count: %d", rosterCount);
-
-    // send initial sequence to client
-    tcp_write(pcb, "VN2.0\n", 6,  TCP_WRITE_FLAG_COPY);
-    tcp_write(pcb, "HTWiBiDiB\n", 10, TCP_WRITE_FLAG_COPY);
-    tcp_write(pcb, "HtWiBiDiB v1.0\n", 15, TCP_WRITE_FLAG_COPY);
-
-    // The roster list is dynamically configurable
-
-    log_snprintf(buf, sizeof(buf),
-            "RL");
-    tcp_write(pcb, buf, (u16_t)strlen(buf), TCP_WRITE_FLAG_COPY);
-
-    while (loco_index < rosterCount) {
-        const roster_entry_t *entry = roster_get(loco_index);
-        loco_index++; 
-
-        if (!entry) { 
-            continue; 
+// ─── Envoi sur TCP avec controle (decoupe selon la place dispo) ─────────────
+static bool tcp_write_all(struct tcp_pcb *pcb, const char *p, size_t len) {
+    while (len) {
+        u16_t room = tcp_sndbuf(pcb);
+        if (room == 0) { tcp_output(pcb); LOG_INFO(TAG, "ERR tcp_sndbuf plein, %u octets perdus", (unsigned)len); return false; }
+        u16_t n = (len < room) ? (u16_t)len : room;
+        if (tcp_write(pcb, p, n, TCP_WRITE_FLAG_COPY) != ERR_OK) {
+            LOG_INFO(TAG, "ERR tcp_write erreur"); return false;
         }
-
-        LOG_INFO(TAG, "Current roster.id: %s", entry->id);
-
-        // prepare data of current roster entry
-        log_snprintf(buf, sizeof(buf),
-                "%d]\\[%s}|{%d}|{%s",
-            rosterCount, entry->id, entry->dccAddress, entry->longAddress ? "L" : "S");
-
-        tcp_write(pcb, buf, (u16_t)strlen(buf), TCP_WRITE_FLAG_COPY);
-
-        if (loco_index < roster.count) {
-            log_snprintf(buf, sizeof(buf),
-                    "]\\[");
-            tcp_write(pcb, buf, (u16_t)strlen(buf), TCP_WRITE_FLAG_COPY);
-        }
+        p += n; len -= n;
     }
-    log_snprintf(buf, sizeof(buf),
-            "\n");
-    tcp_write(pcb, buf, (u16_t)strlen(buf), TCP_WRITE_FLAG_COPY);
-
-    // tcp_write(pcb, "RLRL1]\[BR 185 203-1}|{3}|{S\n",   4,  TCP_WRITE_FLAG_COPY);
-    tcp_write(pcb, "PW" HTTP_ROSTER_PORT_STR "\n", 7, TCP_WRITE_FLAG_COPY);
-    tcp_write(pcb, "PPA2\n",  5,  TCP_WRITE_FLAG_COPY);
-    tcp_output(pcb);
-
+    return true;
 }
-*/
+
+// ─── Accueil Engine Driver : VN / HT / RL<n>]\[nom}|{adr}|{S|L... / PPA2 ────
+void send_welcome_message(struct tcp_pcb *pcb) {
+    static char rl[4 + ROSTER_MAX_ENTRIES * (ROSTER_STRING_MAX + 20) + 8];
+    size_t n = 0;
+    uint8_t count = roster.count;
+
+    LOG_INFO(TAG, "Welcome ED. Roster count: %d", count);
+
+    tcp_write_all(pcb, "VN2.0\n", 6);
+    tcp_write_all(pcb, "HTWiBiDiB\n", 10);
+
+    n += snprintf(rl + n, sizeof(rl) - n, "RL%d", count);
+    for (uint8_t i = 0; i < count; i++) {
+        const roster_entry_t *e = roster_get(i);
+        if (!e) continue;
+        n += snprintf(rl + n, sizeof(rl) - n, "]\\[%s}|{%d}|{%s",
+                      e->id, e->dccAddress, e->longAddress ? "L" : "S");
+        if (n >= sizeof(rl) - 2) { LOG_INFO(TAG, "ERR RL tronque"); n = sizeof(rl) - 2; break; }
+    }
+    rl[n++] = '\n';
+    LOG_INFO(TAG, "RL len=%u sndbuf=%u : %.70s", (unsigned)n, (unsigned)tcp_sndbuf(pcb), rl);
+    bool ok = tcp_write_all(pcb, rl, n);
+    LOG_INFO(TAG, "RL envoye ok=%d", ok);
+
+    // pas de "PW<port>" : on n'a pas de serveur HTTP de roster
+    tcp_write_all(pcb, "PPA2\n", 5);
+    tcp_output(pcb);
+}
+
 
 // ─── process_rx_withrottle() ─────────────────────────────────────────────────
 void process_rx_withrottle(rx_data_t *data, uint8_t slot) {
@@ -508,12 +504,8 @@ void process_rx_withrottle(rx_data_t *data, uint8_t slot) {
 
     // ── 'H' device ID → envoyer accueil complet ───────────────────────────────
     else if (data->msg[0] == 'H') {
-        LOG_INFO(TAG, "H (device ID) received → sending VN/HT/RL/PPA");
-        tcp_write(pcb, "VN2.0\n", 6,  TCP_WRITE_FLAG_COPY);
-        tcp_write(pcb, "HTWiBiDiB\n", 10, TCP_WRITE_FLAG_COPY);
-        tcp_write(pcb, "RL0\n",   4,  TCP_WRITE_FLAG_COPY);
-        tcp_write(pcb, "PPA2\n",  5,  TCP_WRITE_FLAG_COPY);
-        tcp_output(pcb);
+        LOG_INFO(TAG, "H (device ID) received -> sending VN/HT/RL/PPA");
+        send_welcome_message(pcb);
     }
 
     // ── 'P' power ────────────────────────────────────────────────────────────
@@ -560,9 +552,14 @@ void process_rx_withrottle(rx_data_t *data, uint8_t slot) {
 
         uint8_t action = (uint8_t)data->msg[2];  // '+', '-', 'A'
 
-        // actionKey : après '<;>'
+        // cle de loco : msg[3 .. delimiter-2]  ex "L4528"
+        memset(locoKey_g, 0, sizeof(locoKey_g));
+        for (int k = 3; k < (delimiter - 1) && (k - 3) < (int)sizeof(locoKey_g) - 1; k++)
+            locoKey_g[k - 3] = data->msg[k];
+
+        // texte apres '<;>' : action (V/R/F/...) ou, pour '+', l'id roster
         memset(actionKey_g, 0, sizeof(actionKey_g));
-        for (int k = (delimiter + 2); k < data->len; k++) {
+        for (int k = (delimiter + 2); k < data->len && (k - (delimiter + 2)) < (int)sizeof(actionKey_g) - 1; k++) {
             actionKey_g[k - (delimiter + 2)] = data->msg[k];
         }
 
@@ -576,17 +573,18 @@ void process_rx_withrottle(rx_data_t *data, uint8_t slot) {
         // ── '+' : ajout loco ──────────────────────────────────────────────────
         if (action == '+') {
             int k = (int)strtol(LocoAdress_g, NULL, 10);
+            Loco[slot].longAddr = (data->msg[3] == 'L');
             Loco[slot].dccAdress = k;
            // printf("[withrottle_if] locoAdd th=%s ak=%s dcc=%d slot=%d\n",
            //       th, actionKey_g, k, slot);
-            LOG_INFO(TAG," loco+  ak=%s dcc=%d slot=%d", actionKey_g, k, slot );
+            LOG_INFO(TAG," loco+  key=%s ref=%s dcc=%d slot=%d", locoKey_g, actionKey_g, k, slot );
             
-                   locoAdd(th, actionKey_g, slot);
+            locoAdd(th, locoKey_g, actionKey_g, slot);
         }
 
         // ── '-' : release loco ────────────────────────────────────────────────
         else if (action == '-') {
-            locoRelease(th, actionKey_g, slot);
+            locoRelease(th, locoKey_g, slot);
         }
 
         // ── 'A' : action ──────────────────────────────────────────────────────

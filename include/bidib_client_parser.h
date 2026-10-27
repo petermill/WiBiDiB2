@@ -19,6 +19,8 @@ extern uint8_t g_bidib_backoff;
 // Tableau des 29 états de fonctions F0..F28
 typedef int t_loco_functions[29];
 
+bool bidib_is_ready(void);
+
 // ─── API publique ─────────────────────────────────────────────────────────────
 void init_bidib_client(void);
 void run_bidib_client(void);

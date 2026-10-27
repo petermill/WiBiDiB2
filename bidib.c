@@ -16,6 +16,7 @@
 #include "bidib.h"
 #include "bidib_client_if.h"
 #include "crc_8bit.h"
+#include "config.h" 
 
 // ─────────────────────────────────────────────────
 // UID unique du nœud
@@ -34,6 +35,8 @@ static PIO  s_pio   = pio0;
 static uint s_sm_rx = 0;
 static uint s_sm_tx = 1;
 volatile bool tx_nak_mode = false;
+/* mis a true par main() quand la boucle principale tourne */
+volatile bool g_bidib_logon_allowed = false;  
 extern uint8_t g_bidib_connect;
 extern uint8_t g_bidib_backoff;
 extern uint8_t my_bidib_node_addr;
@@ -199,6 +202,10 @@ void bidib_start_parser_tx(void)
 // ─────────────────────────────────────────────────
 // ISR RX —
 // ─────────────────────────────────────────────────
+#define BIDIB_BACKOFF_MAX   16   /* plafond du delai */
+#define BIDIB_APPLIED_TOKENS 3   /* jetons LOGON sans ACK avant de declarer l'echec */
+static uint8_t applied_tokens = 0;
+
 static void __not_in_flash_func(bidib_pio_rx_isr)(void)
 {
     pio_interrupt_clear(s_pio, 0);
@@ -220,7 +227,7 @@ static void __not_in_flash_func(bidib_pio_rx_isr)(void)
         if (id_bit == 1) {
             if (byte & 0x40) {
                 // Token système
-                if (byte == BIDIBUS_LOGON) {
+                  if (byte == BIDIBUS_LOGON && g_bidib_logon_allowed) {
                     if (g_bidib_connect == BIDIB_DISCONNECTED) {
                         if (g_bidib_backoff) {
                             g_bidib_backoff--;
@@ -237,14 +244,16 @@ static void __not_in_flash_func(bidib_pio_rx_isr)(void)
                             }
                             if (bus_free) {
                                 g_bidib_connect = BIDIB_APPLIED;
+                                applied_tokens = 0;
                                 bidib_start_tx();  // ← non bloquant !
                             }
                         }
                     } else if (g_bidib_connect == BIDIB_APPLIED) {
-                        // Laisser du temps au parser pour traiter le ACK
-                        // avant de relancer un logon                      
-                            g_bidib_backoff = (g_bidib_backoff + 1) & 0x3F;
-                            g_bidib_connect = BIDIB_DISCONNECTED;                   
+                        if (++applied_tokens >= BIDIB_APPLIED_TOKENS) {
+                            applied_tokens = 0;
+                            if (g_bidib_backoff < BIDIB_BACKOFF_MAX) g_bidib_backoff++;
+                            g_bidib_connect = BIDIB_DISCONNECTED;
+                        }
                     }
                 }
             } else {
@@ -261,7 +270,7 @@ static void __not_in_flash_func(bidib_pio_rx_isr)(void)
                     bidib_tx_buf_read   = (bidib_tx_buf_read + plength) & (BIDIB_TX_BUF_SIZE - 1);
                     bidib_tx_ahead      = 0;
                 #if (DEBUG == 1)
-                   printf("emit: parser_index=%d remaining=%d\n", tx_parser_index, tx_parser_remaining);
+                  // printf("emit: parser_index=%d remaining=%d\n", tx_parser_index, tx_parser_remaining);
                  #endif  
                    pio_sm_put(s_pio, s_sm_tx, (uint32_t)plength);
                     irq_set_enabled(PIO0_IRQ_1, true);
@@ -282,8 +291,8 @@ static void __not_in_flash_func(bidib_pio_rx_isr)(void)
 void bidib_init(void)
 {
     printf("bidib_init\n");
-    
-    bidib_prepare_logon_buf();
+
+      bidib_prepare_logon_buf();
 
     gpio_init(BIDIB_PIN_DE);
     gpio_set_dir(BIDIB_PIN_DE, GPIO_OUT);

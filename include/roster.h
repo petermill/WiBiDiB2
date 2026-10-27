@@ -44,6 +44,7 @@ extern roster_t roster;
 void roster_init(void);
 const roster_entry_t* roster_get(uint8_t index);
 int roster_find_by_id(const char* id);
-void roster_load(const uint8_t *buf, uint32_t len);
+void roster_dump(void);
+bool roster_load(const uint8_t *buf, uint32_t len);
 
 #endif /* ROSTER_H_ */

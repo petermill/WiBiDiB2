@@ -1,0 +1,1 @@
+void status_led_set(bool on);

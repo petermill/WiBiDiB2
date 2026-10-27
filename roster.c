@@ -6,7 +6,7 @@
  * (roster_init) ou chargé dynamiquement depuis le CS via le transfert
  * BiDiB MSG_STRING (roster_load, voir roster_transfer.c).
  *
- * Pierre Moulin / (base: collègue)
+ * Pierre Moulin / (base: Andreas Kuhtz)
  */
 
 #include <stdio.h>
@@ -20,12 +20,12 @@ roster_t roster;
 
 // ─── Construction interne (paramétrée par destination) ────────────────────
 
-static void add_entry_to(roster_t *r, const char *id, const char *roadName, const char *roadNumber,
+static bool add_entry_to(roster_t *r, const char *id, const char *roadName, const char *roadNumber,
                           const char *mfg, const char *model,
                           const char *decoderModel, const char *decoderFamily,
                           uint16_t dccAddr, bool longAddr, uint8_t maxSpeed,
                           uint8_t maxFnNum) {
-    if (r->count >= ROSTER_MAX_ENTRIES) return;
+    if (r->count >= ROSTER_MAX_ENTRIES) return false;
     roster_entry_t *e = &r->entries[r->count];
     memset(e, 0, sizeof(*e));
     strncpy(e->id, id, ROSTER_STRING_MAX - 1);
@@ -40,6 +40,7 @@ static void add_entry_to(roster_t *r, const char *id, const char *roadName, cons
     e->maxSpeed     = maxSpeed;
     e->maxFnNum     = maxFnNum;
     r->count++;
+    return true;
 }
 
 static void set_func_in(roster_t *r, uint8_t locoIndex, uint8_t fn, bool lockable,
@@ -59,7 +60,7 @@ static void add_entry(const char *id, const char *roadName, const char *roadNumb
                        const char *decoderModel, const char *decoderFamily,
                        uint16_t dccAddr, bool longAddr, uint8_t maxSpeed,
                        uint8_t maxFnNum) {
-    add_entry_to(&roster, id, roadName, roadNumber, mfg, model,
+    (void)add_entry_to(&roster, id, roadName, roadNumber, mfg, model,
                  decoderModel, decoderFamily, dccAddr, longAddr, maxSpeed, maxFnNum);
 }
 
@@ -159,12 +160,15 @@ static void rd_str(reader_t *r, char *out, uint8_t outmax) {
     r->p += n;   // avance toujours de n, même si la copie a été tronquée
 }
 
-void roster_load(const uint8_t *buf, uint32_t len) {
+bool roster_load(const uint8_t *buf, uint32_t len) {
     reader_t r = { buf, buf + len, false };
-    roster_t tmp;
+    // static : roster_t est gros (ROSTER_MAX_ENTRIES x entree), la pile du Pico
+    // est petite. Pas de reentrance ici (appel unique depuis roster_transfer).
+    static roster_t tmp;
     memset(&tmp, 0, sizeof(tmp));
 
     uint8_t loco_count = rd_u8(&r);
+    uint8_t dropped = 0;
     for (uint8_t i = 0; i < loco_count && !r.err; i++) {
         char id[ROSTER_STRING_MAX], roadName[ROSTER_STRING_MAX], roadNumber[ROSTER_STRING_MAX];
         char mfg[ROSTER_STRING_MAX], model[ROSTER_STRING_MAX];
@@ -185,9 +189,12 @@ void roster_load(const uint8_t *buf, uint32_t len) {
         uint8_t  funcCount = rd_u8(&r);
         if (r.err) break;
 
-        add_entry_to(&tmp, id, roadName, roadNumber, mfg, model,
-                      decoderModel, decoderFamily, dccAddr,
-                      (flags & 0x01) != 0, maxSpeed, maxFnNum);
+        // Si le roster est plein, la loco est ignoree ET ses fonctions aussi
+        // (sinon elles ecraseraient celles de la derniere loco valide).
+        bool added = add_entry_to(&tmp, id, roadName, roadNumber, mfg, model,
+                                  decoderModel, decoderFamily, dccAddr,
+                                  (flags & 0x01) != 0, maxSpeed, maxFnNum);
+        if (!added) dropped++;
 
         for (uint8_t f = 0; f < funcCount && !r.err; f++) {
             uint8_t fn     = rd_u8(&r);
@@ -195,18 +202,24 @@ void roster_load(const uint8_t *buf, uint32_t len) {
             char label[ROSTER_STRING_MAX];
             rd_str(&r, label, sizeof(label));
             if (r.err) break;
-            set_func_in(&tmp, tmp.count - 1, fn,
-                        (fflags & 0x01) != 0,   // lockable
-                        (fflags & 0x02) != 0,   // visible
-                        label);
+            if (added) {
+                set_func_in(&tmp, tmp.count - 1, fn,
+                            (fflags & 0x01) != 0,   // lockable
+                            (fflags & 0x02) != 0,   // visible
+                            label);
+            }
         }
     }
 
     if (r.err) {
         LOG_ERROR(TAG, "roster_load: donnees corrompues, roster actif inchange");
-        return;
+        return false;
+    }
+    if (dropped) {
+        LOG_WARN(TAG, "roster_load: %u locos ignorees (max %u)", dropped, (unsigned)ROSTER_MAX_ENTRIES);
     }
 
     memcpy(&roster, &tmp, sizeof(roster));
     LOG_INFO(TAG, "roster_load: %u locos charges", roster.count);
+    return true;
 }

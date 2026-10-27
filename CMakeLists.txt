@@ -44,8 +44,10 @@ pico_sdk_init()
     bidib_client_if.c
     bidib_client_parser.c
     mdns.c
+    status_led.c
     roster.c
     roster_transfer.c
+    roster_store.c
 )
 
 # Générer le header C depuis le fichier PIO
@@ -66,10 +68,11 @@ target_link_libraries(WiBiDiB
     hardware_pio
     hardware_irq
     hardware_gpio
+    hardware_flash pico_flash
     pico_unique_id
     pico_cyw43_arch_lwip_poll   # WiFi + lwIP bare-metal
     pico_lwip_mdns              # répondant mDNS (découverte Engine Driver)
-)
+    )
 
 target_include_directories(WiBiDiB PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}

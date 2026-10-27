@@ -20,21 +20,26 @@
 #include "bidib_client_parser.h"
 #include "config.h"
 #include "mdns.h"
+#include "status_led.h" 
+#include "roster.h"
+#include "roster_store.h"
 
+extern volatile bool g_bidib_logon_allowed;
 static const char *TAG = "main";
 
 int main(void)
 {
     stdio_init_all();
    // sleep_ms(3000);  // attendre USB serial
-   while (!stdio_usb_connected()) {
+    while (!stdio_usb_connected()) {
     sleep_ms(100);
-}
+         }
 printf("USB connected, starting init...\n");
     LOG_INFO(TAG,"=== WI_BIDIB_ED Pico 2W v0.2 ===");
     stdio_flush();
-
-    // ── BiDiB PIO (inchangé) ──────────────────────────────────────────────────
+printf("[roster] sizeof(roster_t)=%u, MAX_ENTRIES=%u\n",
+       (unsigned)sizeof(roster_t), (unsigned)ROSTER_MAX_ENTRIES);
+    // ── BiDiB PIO  ──────────────────────────────────────────────────
     // ISR RX/TX enregistrées dans bidib_init(), tournent en hardware
     bidib_init();
     LOG_INFO(TAG,"BiDiB PIO OK");
@@ -43,11 +48,7 @@ printf("USB connected, starting init...\n");
 
     // ── WiFi AP + TCP WiThrottle ──────────────────────────────────────────────
     smartphone_if_init();   // init table throttle[] + UID BiDiB
-/*
-    if (!wifi_init_softap()) {
-        printf("WiFi AP ERREUR — on continue sans WiFi\n");
-        // On ne bloque pas : le BiDiB seul reste fonctionnel
-   */ 
+
         struct netif *ap_netif = wifi_init_softap();
         if (!ap_netif) {
             printf("WiFi AP ERREUR — on continue sans WiFi\n");
@@ -57,15 +58,21 @@ printf("USB connected, starting init...\n");
             } else {
                 LOG_INFO(TAG,"WiFi AP + TCP OK — SSID:myssid port:5550");
             }
-             // mDNS : advertise the WiThrottle service → Engine Driver discovery
+            // mDNS : advertise the WiThrottle service → Engine Driver discovery
               mdns_init(ap_netif);
-        }
-        
+            }
+
+            roster_store_init_load();
 
     printf("Boucle principale\n");
 
 
-    // ── Boucle principale ─────────────────────────────────────────────────────
+    bidib_flush_rx();                       /* jeter ce que l'ISR a accumule pendant l'init */
+   g_bidib_connect = BIDIB_DISCONNECTED;   /* etat propre */
+   g_bidib_logon_allowed = true;           /* le premier jeton LOGON declenche maintenant le logon */
+    printf("logon autorise\n");
+   
+   // ── Boucle principale ─────────────────────────────────────────────────────
     //
     // cyw43_arch_poll() déclenche les callbacks TCP (recv, accept, err)
     //   → process_rx_withrottle() appelé à l'intérieur
@@ -76,7 +83,8 @@ printf("USB connected, starting init...\n");
     while (1) {
         cyw43_arch_poll();  // traite WiFi + lwIP callbacks
         run_bidib_client(); 
-      //  sleep_ms(1);
+        status_led_set(bidib_is_ready());   // cheap : ne fait quelque chose que sur changement
+       roster_store_poll();
     }
 
     cyw43_arch_deinit();
