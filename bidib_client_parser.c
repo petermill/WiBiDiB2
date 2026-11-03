@@ -787,7 +787,12 @@ void bidib_send_cs_drive(uint16_t dcc_addr, int speed, uint8_t dir, t_loco_funct
     drive.addr    = dcc_addr;
     drive.format  = BIDIB_CS_DRIVE_FORMAT_DCC128;
     drive.active  = active;
-    drive.speed   = (speed < 0) ? 0x01 : ((uint8_t)(speed & 0x7F) | (dir ? 0x80 : 0));
+  //  drive.speed   = (speed < 0) ? 0x01 : ((uint8_t)(speed & 0x7F) | (dir ? 0x80 : 0));
+    drive.speed = (speed < 0) ? 0x01                                    // arret d'urgence
+                : (uint8_t)(((speed == 0) ? 0 : ((speed > 126 ? 126 : speed) + 1))
+                            | (dir ? 0x80 : 0));
+    // ED 0 -> 0 (arret), ED 1 -> 2, ED 126 -> 0x7F
+
     drive.f4_f0   = (f[0]?0x10:0)|(f[1]?0x01:0)|(f[2]?0x02:0)|(f[3]?0x04:0)|(f[4]?0x08:0);
     drive.f12_f5  = (f[5]?0x01:0)|(f[6]?0x02:0)|(f[7]?0x04:0)|(f[8]?0x08:0)
                    |(f[9]?0x10:0)|(f[10]?0x20:0)|(f[11]?0x40:0)|(f[12]?0x80:0);
@@ -825,7 +830,46 @@ gpio_put(BIDIB_PIN_TEST , 0);
     send_bidib_message(message);
 #endif
 }
-    
+
+/*
+ * BROUILLON v2 (non compile, non teste) -- aiguillages Engine Driver via WiThrottle
+ * Pico : withrottle_if.c + bidib_client_parser.c (+ 1 ligne dans main.c)
+ *
+ * Fixe par vos mesures :
+ *   - VI-4 = adresse vraie 23 du Wizard (24 en comptant a partir de 1, aussi sur XpressNet)
+ *   - message CS_ACCESSORY = 4 octets : addrl, addrh, data, time
+ *       data = (sortie & 1) | (activate << 5)      mode direct, accessoire classique
+ *   - il faut envoyer ON (activate=1) puis OFF (activate=0) avec la meme sortie
+ *   - chemin Pico -> CS : bidib_guest_req_send(MSG_CS_ACCESSORY, BIDIB_TARGET_MODE_DCCGEN, ...)
+ *     comme pour CS_DRIVE (distributed control)
+ *
+ * A valider au 1er essai : sens ferme/devie (TURNOUT_OUT_*), delai TURNOUT_COIL_MS.
+ */
+
+
+void bidib_send_cs_accessory(uint16_t addr, uint8_t output, uint8_t activate) {
+    LOG_INFO(TAG, "cs_accessory IN: addr=%u out=%u act=%u", addr, output, activate);
+ 
+    if (g_bidib_connect != BIDIB_CONNECTED) { LOG_INFO(TAG, "cs_accessory DROP: pas connecte"); return; }
+    if (!g_bidib_spontan_enabled)          { LOG_INFO(TAG, "cs_accessory DROP: SYS_ENABLE pas recu"); return; }
+ 
+    // construit a la main (pas de champ de bits : disposition independante du compilateur)
+    uint8_t d[4];
+    d[0] = (uint8_t)(addr & 0xFF);                         // addrl
+    d[1] = (uint8_t)(addr >> 8);                           // addrh
+    d[2] = (uint8_t)((output & 0x01) | (activate ? 0x20 : 0x00));  // bit5=activate, bit6=0 direct, bit7=0 classique
+    d[3] = 0;                                              // time (inutilise en mode direct)
+ 
+#if (BIDIB_DISTRIBUTED_CONTROL == 1)
+    if (!g_bidib_guest_enabled) { printf("[cs_accessory] guest not subscribed yet - drop\n"); return; }
+    bidib_guest_req_send(MSG_CS_ACCESSORY, BIDIB_TARGET_MODE_DCCGEN, d, sizeof(d));
+#else
+    uint8_t message[16];
+    uint8_t i = bidib_build_header(message, MSG_CS_ACCESSORY, sizeof(d));
+    memcpy(&message[i], d, sizeof(d));
+    send_bidib_message(message);
+#endif
+}
 
 
 // ─── bidib_send_boost_state() ────────────────────────────────────────────────

@@ -446,7 +446,117 @@ static bool tcp_write_all(struct tcp_pcb *pcb, const char *p, size_t len) {
     return true;
 }
 
+
+/* ======================================================================
+ * 2. withrottle_if.c  -- avant send_welcome_message()
+ * ====================================================================== */
+ 
+#define WT_TURNOUT_UNKNOWN   1
+#define WT_TURNOUT_CLOSED    2
+#define WT_TURNOUT_THROWN    4
+ 
+#define TURNOUT_ADDR_OFFSET  1     // numero tape dans ED (a partir de 1) -> adresse vraie (a partir de 0)
+#define TURNOUT_OUT_CLOSED   0     // valeur de (aspect & 1) pour "ferme"  -- A VALIDER
+#define TURNOUT_OUT_THROWN   1     // valeur de (aspect & 1) pour "devie"  -- A VALIDER
+#define TURNOUT_COIL_MS      300   // duree entre ON et OFF                -- A REGLER
+ 
+typedef struct {
+    const char *sys;     // nom systeme vu par ED
+    const char *user;    // nom affiche ("Lieu:Nom" -> filtre par lieu avec le delimiteur ':')
+    uint16_t    addr;    // adresse VRAIE envoyee au maitre (a partir de 0)
+    uint8_t     state;   // 1/2/4
+} wt_turnout_t;
+ 
+static wt_turnout_t wt_turnouts[] = {
+    { "LT24", "VI-4", 23, WT_TURNOUT_UNKNOWN },
+    // { "LT25", "...", 24, WT_TURNOUT_UNKNOWN },
+};
+#define WT_TURNOUT_COUNT (sizeof(wt_turnouts) / sizeof(wt_turnouts[0]))
+ 
+// ---- OFF differe (sans bloquer la boucle) ----
+#define TURNOUT_OFF_MAX 8
+static struct { bool used; uint16_t addr; uint8_t out; uint32_t t_off; } off_q[TURNOUT_OFF_MAX];
+ 
+static void turnout_coil_on(uint16_t addr, uint8_t out) {
+    bidib_send_cs_accessory(addr, out, 1);                          // ON
+    for (int i = 0; i < TURNOUT_OFF_MAX; i++) {
+        if (!off_q[i].used) {
+            off_q[i].used  = true;
+            off_q[i].addr  = addr;
+            off_q[i].out   = out;
+            off_q[i].t_off = now_ms() + TURNOUT_COIL_MS;
+            return;
+        }
+    }
+    bidib_send_cs_accessory(addr, out, 0);                          // file pleine : OFF immediat
+}
+ 
+// PTT + PTL, a l'accueil
+static void send_turnout_list(struct tcp_pcb *pcb) {
+    static char buf[256 + 80 * 8];
+    size_t n = 0;
+    n += snprintf(buf + n, sizeof(buf) - n,
+        "PTT]\\[Turnouts}|{Turnout]\\[Closed}|{2]\\[Thrown}|{4]\\[Unknown}|{1]\\[Inconsistent}|{8\n");
+    n += snprintf(buf + n, sizeof(buf) - n, "PTL");
+    for (size_t i = 0; i < WT_TURNOUT_COUNT && n < sizeof(buf) - 80; i++)
+        n += snprintf(buf + n, sizeof(buf) - n, "]\\[%s}|{%s}|{%d",
+                      wt_turnouts[i].sys, wt_turnouts[i].user, wt_turnouts[i].state);
+    n += snprintf(buf + n, sizeof(buf) - n, "\n");
+    LOG_INFO(TAG, "PTT/PTL envoyes (%u aiguillages)", (unsigned)WT_TURNOUT_COUNT);
+    tcp_write_all(pcb, buf, n);
+}
+// commande recue : PTA<act><nom>
+static void turnout_action(struct tcp_pcb *pcb, char act, const char *name_raw) {
+    char   name[24];
+    size_t i = 0;
+    while (name_raw[i] && name_raw[i] != '\n' && name_raw[i] != '\r' && i < sizeof(name) - 1) {
+        name[i] = name_raw[i]; i++;
+    }
+    name[i] = '\0';
+ 
+    const char *p = name;
+    while (*p && (*p < '0' || *p > '9')) p++;
+    int num = (int)strtol(p, NULL, 10);                    // "LT24" -> 24, "24" -> 24
+ 
+    wt_turnout_t *t = NULL;
+    for (size_t k = 0; k < WT_TURNOUT_COUNT; k++)
+        if (strcmp(name, wt_turnouts[k].sys) == 0) { t = &wt_turnouts[k]; break; }
+    if (!t)
+        for (size_t k = 0; k < WT_TURNOUT_COUNT; k++)
+            if ((int)wt_turnouts[k].addr + TURNOUT_ADDR_OFFSET == num) { t = &wt_turnouts[k]; break; }
+ 
+    uint8_t cur = t ? t->state : WT_TURNOUT_UNKNOWN;       // adresse tapee a la main : etat non memorise
+    uint8_t ns;
+    if      (act == 'C') ns = WT_TURNOUT_CLOSED;
+    else if (act == 'T') ns = WT_TURNOUT_THROWN;
+    else if (act == '2') ns = (cur == WT_TURNOUT_CLOSED) ? WT_TURNOUT_THROWN : WT_TURNOUT_CLOSED;
+    else { LOG_INFO(TAG, "PTA action inconnue '%c' nom=%s", act, name); return; }
+ 
+    int addr = t ? (int)t->addr : (num - TURNOUT_ADDR_OFFSET);
+    if (addr < 0) { LOG_INFO(TAG, "PTA adresse invalide '%s'", name); return; }
+    if (t) t->state = ns;
+ 
+    LOG_INFO(TAG, "PTA act=%c nom=%s -> adresse vraie %d, etat %d", act, name, addr, ns);
+    turnout_coil_on((uint16_t)addr, (ns == WT_TURNOUT_THROWN) ? TURNOUT_OUT_THROWN : TURNOUT_OUT_CLOSED);
+ 
+    char msg[48];                                          // confirmation optimiste
+    int  len = snprintf(msg, sizeof(msg), "PTA%d%s\n\n", ns, name);
+    send_msg(pcb, len, msg);
+    tcp_output(pcb);
+}
+void withrottle_turnout_poll(void) {
+        uint32_t now = now_ms();
+        for (int i = 0; i < TURNOUT_OFF_MAX; i++) {
+            if (off_q[i].used && (int32_t)(now - off_q[i].t_off) >= 0) {
+                bidib_send_cs_accessory(off_q[i].addr, off_q[i].out, 0);   // OFF
+                off_q[i].used = false;
+                }
+            }
+        }
+
+
 // ─── Accueil Engine Driver : VN / HT / RL<n>]\[nom}|{adr}|{S|L... / PPA2 ────
+
 void send_welcome_message(struct tcp_pcb *pcb) {
     static char rl[4 + ROSTER_MAX_ENTRIES * (ROSTER_STRING_MAX + 20) + 8];
     size_t n = 0;
@@ -470,6 +580,7 @@ void send_welcome_message(struct tcp_pcb *pcb) {
     bool ok = tcp_write_all(pcb, rl, n);
     LOG_INFO(TAG, "RL envoye ok=%d", ok);
 
+    send_turnout_list(pcb);
     // pas de "PW<port>" : on n'a pas de serveur HTTP de roster
     tcp_write_all(pcb, "PPA2\n", 5);
     tcp_output(pcb);
@@ -522,6 +633,13 @@ void process_rx_withrottle(rx_data_t *data, uint8_t slot) {
                 bidib_send_boost_state(0);   // MSG_BOOST_OFF
             }
         // PPA2 = état inconnu → on ne fait rien
+        else if (data->msg[1] == 'T' && data->msg[2] == 'A') {
+            LOG_INFO(TAG, "PTA brut: %s", data->msg);      // voir ce qu'ED envoie vraiment
+            turnout_action(pcb, data->msg[3], &data->msg[4]);
+        }
+
+
+
         }
     }
 

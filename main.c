@@ -23,6 +23,7 @@
 #include "status_led.h" 
 #include "roster.h"
 #include "roster_store.h"
+#include "withrottle_if.h"
 
 extern volatile bool g_bidib_logon_allowed;
 static const char *TAG = "main";
@@ -85,6 +86,7 @@ printf("[roster] sizeof(roster_t)=%u, MAX_ENTRIES=%u\n",
         run_bidib_client(); 
         status_led_set(bidib_is_ready());   // cheap : ne fait quelque chose que sur changement
        roster_store_poll();
+       withrottle_turnout_poll();
     }
 
     cyw43_arch_deinit();

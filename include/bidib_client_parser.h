@@ -37,6 +37,9 @@ bool send_bidib_message(uint8_t *message);
 void bidib_send_cs_drive(uint16_t dcc_addr, int speed, uint8_t dir, 
     t_loco_functions f, uint8_t active);
 
+    void bidib_send_cs_accessory(uint16_t addr, uint8_t output, 
+        uint8_t activate);
+
 // Alimentation voie : on=1 (PPA1), on=0 (PPA0)
 void bidib_send_boost_state(uint8_t on);
 
