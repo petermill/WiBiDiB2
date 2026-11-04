@@ -68,7 +68,9 @@ void throttle_stop(uint8_t slot) {
 
     if (Loco[slot].dccAdress != 0)
         bidib_send_cs_drive(Loco[slot].dccAdress, 0, Loco[slot].dir,
-                            Loco[slot].LocoState, 1);
+    
+    Loco[slot].LocoState, 1);Loco[slot].dccAdress  = 0;   
+    Loco[slot].Loco_actionKey[0] = '\0';   
 }
 
 // Recherche dans le roster : adresse + type (court/long).
