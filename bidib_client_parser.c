@@ -788,11 +788,13 @@ void bidib_send_cs_drive(uint16_t dcc_addr, int speed, uint8_t dir, t_loco_funct
     drive.format  = BIDIB_CS_DRIVE_FORMAT_DCC128;
     drive.active  = active;
   //  drive.speed   = (speed < 0) ? 0x01 : ((uint8_t)(speed & 0x7F) | (dir ? 0x80 : 0));
-    drive.speed = (speed < 0) ? 0x01                                    // arret d'urgence
-                : (uint8_t)(((speed == 0) ? 0 : ((speed > 126 ? 126 : speed) + 1))
-                            | (dir ? 0x80 : 0));
     // ED 0 -> 0 (arret), ED 1 -> 2, ED 126 -> 0x7F
-
+    uint8_t step;
+    if (speed < 0)        step = 0x01;                                          // arrêt d'urgence
+    else if (speed == 0)  step = 0x00;                                          // arrêt normal
+    else                  step = (uint8_t)((speed > 126 ? 126 : speed) + 1);    // 1..126 -> 2..127
+    drive.speed = (uint8_t)(step | (dir ? 0x80 : 0x00));
+    
     drive.f4_f0   = (f[0]?0x10:0)|(f[1]?0x01:0)|(f[2]?0x02:0)|(f[3]?0x04:0)|(f[4]?0x08:0);
     drive.f12_f5  = (f[5]?0x01:0)|(f[6]?0x02:0)|(f[7]?0x04:0)|(f[8]?0x08:0)
                    |(f[9]?0x10:0)|(f[10]?0x20:0)|(f[11]?0x40:0)|(f[12]?0x80:0);

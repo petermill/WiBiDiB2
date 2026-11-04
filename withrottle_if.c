@@ -249,33 +249,6 @@ if (ak[0] == 'F') {
         }
         fstate = Loco[slot].LocoState[fn];
         LOG_INFO(TAG, "F%d lockable=%d state=%d", fn, lockable, fstate);
-
-       
-
-
-/* previous version sans roster
-
-     //   LOG_INFO(TAG, "previous fstate Loco[slot].LocoState[fn] %d",Loco[slot].LocoState[fn]);
-        int fstate = ak[1] - '0';               // 0 ou 1              
-     //   LOG_INFO(TAG, "query for fstate Loco[slot].LocoState[fn] %d",Loco[slot].LocoState[fn]); 
-           if (fn != 2) {
-                // we expect everything other than F2 is lockable
-                if (fstate == 1) {
-                    // It ignores the UP.
-                    LOG_INFO(TAG, "Skip fstate = 1 because function is lockable: %d", fn);
-                    return;
-                }
-                else {
-                    // TOGGLEs the state when it receives the DOWN
-                    Loco[slot].LocoState[fn] = Loco[slot].LocoState[fn] == 0 ? 1 : 0;
-                    fstate = Loco[slot].LocoState[fn];
-                    LOG_INFO(TAG, "Toggled current state fn = %d, state: %d", fn, fstate);
-                }
-            }
-           else {
-               Loco[slot].LocoState[fn] = fstate;
-            }
-       */
             
         // Renvoyer l'état confirmé au smartphone : M0A<ak><;>F<state><num>
         memset(msg, 0, sizeof(msg));
@@ -381,8 +354,14 @@ if (ak[0] == 'F') {
 
     // ── X : emergency stop ────RUN_STOP,     // DCC Running, all Engines Emergency Stop────────────────────────────
     else if (ak[0] == 'X') {
-        // Xpressnet command 0x81 0x00 0x81 "Everything stopped (emergency stop)"
-        //       set_command_station_status(STS_STOP);
+        LOG_INFO(TAG, "EMERGENCY STOP dcc=%d", Loco[slot].dccAdress);
+        Loco[slot].newSpeed = 0;
+        bidib_send_cs_drive(Loco[slot].dccAdress, -1, Loco[slot].dir,
+                            Loco[slot].LocoState, 1);
+        // ramener le curseur d'ED à 0
+        int n = snprintf(msg, sizeof(msg), "M%sA%s<;>V0\n\n", th, Loco[slot].Loco_actionKey);
+        send_msg(pcb, n, msg);
+        tcp_output(pcb);
     }
 
     // ── I : idle ──────────────────────────────────────────────────────────────
@@ -619,7 +598,7 @@ void process_rx_withrottle(rx_data_t *data, uint8_t slot) {
         send_welcome_message(pcb);
     }
 
-    // ── 'P' power ────────────────────────────────────────────────────────────
+    // ── 'P' power / turnouts ────────────────────────────────────────────────────────────
     else if (data->msg[0] == 'P') {
         if (data->msg[1] == 'P' && data->msg[2] == 'A') {
             char stri[10];
@@ -632,16 +611,14 @@ void process_rx_withrottle(rx_data_t *data, uint8_t slot) {
             } else if (data->msg[3] == '0') {
                 bidib_send_boost_state(0);   // MSG_BOOST_OFF
             }
-        // PPA2 = état inconnu → on ne fait rien
+        }
         else if (data->msg[1] == 'T' && data->msg[2] == 'A') {
             LOG_INFO(TAG, "PTA brut: %s", data->msg);      // voir ce qu'ED envoie vraiment
             turnout_action(pcb, data->msg[3], &data->msg[4]);
-        }
-
-
+            }
 
         }
-    }
+    
 
     // ── 'M' multithrottle ────────────────────────────────────────────────────
     else if (data->msg[0] == 'M') {
