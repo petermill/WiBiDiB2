@@ -87,6 +87,7 @@ printf("[roster] sizeof(roster_t)=%u, MAX_ENTRIES=%u\n",
         status_led_set(bidib_is_ready());   // cheap : ne fait quelque chose que sur changement
        roster_store_poll();
        withrottle_turnout_poll();
+       withrottle_heartbeat_poll();
     }
 
     cyw43_arch_deinit();

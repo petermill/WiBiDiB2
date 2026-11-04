@@ -17,4 +17,7 @@ bool tcp_server_init(void);
 // Équivalent send_msg(sock, len, msg) ESP32
 void send_msg(struct tcp_pcb *pcb, int len, const char *msg);
 
+//lbération d'un client
+void tcp_server_drop_client(uint8_t slot);
+
 #endif /* TCP_SERVER_H_ */

@@ -13,5 +13,6 @@ void process_rx_withrottle(rx_data_t *data, uint8_t slot);
  void withrottle_turnout_poll(void);
 // Arrêt d'urgence d'un throttle (appelé sur déconnexion)
 void throttle_stop(uint8_t slot);
+void withrottle_heartbeat_poll(void);
 
 #endif /* WITHROTTLE_IF_H_ */

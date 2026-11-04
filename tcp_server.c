@@ -225,6 +225,21 @@ static void tcp_server_err_cb(void *arg, err_t err) {
     }
 }
 
+//--------------- une fonction pour libérer proprement un client -------------
+void tcp_server_drop_client(uint8_t slot) {
+    if (slot >= MAX_THROTTLES) return;
+    struct tcp_pcb *pcb = throttle[slot].pcb;
+    throttle[slot].state = NODE_INACTIVE;
+    throttle[slot].pcb   = NULL;
+    if (pcb) {
+        tcp_arg(pcb, NULL);      // plus aucun callback sur ce pcb
+        tcp_recv(pcb, NULL);
+        tcp_err(pcb, NULL);
+        tcp_abort(pcb);          // ferme sans attendre, sans appeler err_cb
+    }
+    LOG_INFO(TAG, "slot %d libere", slot);
+}
+
 // ─── send_msg() ───────────────────────────────────────────────────────────────
 //
 // Équivalent de send_msg(sock, len, msg) ESP32

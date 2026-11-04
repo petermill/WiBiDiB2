@@ -65,6 +65,10 @@ void throttle_stop(uint8_t slot) {
     heartbeatEnable[slot] = false;
     heartbeat[slot]       = 0;
     Loco[slot].newSpeed   = 0;
+
+    if (Loco[slot].dccAdress != 0)
+        bidib_send_cs_drive(Loco[slot].dccAdress, 0, Loco[slot].dir,
+                            Loco[slot].LocoState, 1);
 }
 
 // Recherche dans le roster : adresse + type (court/long).
@@ -92,6 +96,27 @@ static void locoAdd(const char *th, const char *ak, const char *ref, uint8_t slo
     const roster_entry_t *e = find_entry(Loco[slot].dccAdress, Loco[slot].longAddr);
     LOG_INFO(TAG, "locoAdd dcc=%d %c -> roster %s", Loco[slot].dccAdress,
              Loco[slot].longAddr ? 'L' : 'S', e ? e->id : "(absent)");
+
+     // une loco n'est pilotee que par un slot : les autres slots qui la detiennent sont perimes
+    bool    inherited = false;
+    int     inh_speed = 0;
+    uint8_t inh_dir   = 1;
+    int     inh_state[29];
+    
+     for (uint8_t s = 0; s < MAX_THROTTLES; s++) {
+        if (s != slot &&
+            Loco[s].dccAdress == Loco[slot].dccAdress &&
+            Loco[s].longAddr  == Loco[slot].longAddr) {
+            LOG_INFO(TAG, "loco %d reprise par slot %d, slot %d libere",
+                     Loco[slot].dccAdress, slot, s);
+            inherited = true;
+            inh_speed = Loco[s].newSpeed;
+            inh_dir   = Loco[s].dir;
+            memcpy(inh_state, Loco[s].LocoState, sizeof(inh_state));
+            Loco[s].dccAdress         = 0;
+            Loco[s].Loco_actionKey[0] = '\0';
+        }
+    }
 
     // 1 seule loco par slot : liberer la precedente cote ED avant d'en prendre une autre
     if (Loco[slot].Loco_actionKey[0] != '\0' && strcmp(Loco[slot].Loco_actionKey, ak) != 0) {
@@ -128,35 +153,27 @@ static void locoAdd(const char *th, const char *ak, const char *ref, uint8_t slo
     }
 
     // RAZ état locos en mémoire
-    for (int fk = 0; fk < 29; fk++) Loco[slot].LocoState[fk] = 0;
-    Loco[slot].newSpeed = 0;
-    Loco[slot].oldSpeed = 0;
-    Loco[slot].dir      = 1;
+    if (inherited) {
+        memcpy(Loco[slot].LocoState, inh_state, sizeof(inh_state));
+        Loco[slot].newSpeed = inh_speed;
+        Loco[slot].oldSpeed = inh_speed;
+        Loco[slot].dir      = inh_dir;
+    } else {
+        for (int fk = 0; fk < 29; fk++) Loco[slot].LocoState[fk] = 0;
+        Loco[slot].newSpeed = 0;
+        Loco[slot].oldSpeed = 0;
+        Loco[slot].dir      = 1;
+    }
 
     // M0A<ak><;>V0\n\n
-    length_msg = 0;
-    memset(msg, 0, sizeof(msg));
-    msg[0]='M'; 
-    length_msg++;
-    memcpy(msg+length_msg, th, strlen(th)); length_msg += strlen(th);
-    msg[length_msg++]='A';
-    memcpy(msg+length_msg, ak, strlen(ak)); length_msg += strlen(ak);
-    msg[length_msg++]='<'; msg[length_msg++]=';'; msg[length_msg++]='>';
-    msg[length_msg++]='V'; msg[length_msg++]='0';
-    msg[length_msg++]='\n'; msg[length_msg++]='\n';
+    length_msg = (uint8_t)snprintf(msg, sizeof(msg), "M%sA%s<;>V%d\n\n", 
+            th, ak, Loco[slot].newSpeed);
     send_msg(pcb, length_msg, msg);
-
     // M0A<ak><;>R1\n\n
-    memset(msg, 0, sizeof(msg));
-    msg[0]='M'; length_msg=1;
-    memcpy(msg+length_msg, th, strlen(th)); length_msg += strlen(th);
-    msg[length_msg++]='A';
-    memcpy(msg+length_msg, ak, strlen(ak)); length_msg += strlen(ak);
-    msg[length_msg++]='<'; msg[length_msg++]=';'; msg[length_msg++]='>';
-    msg[length_msg++]='R'; msg[length_msg++]='1';
-    msg[length_msg++]='\n'; msg[length_msg++]='\n';
+    length_msg = (uint8_t)snprintf(msg, sizeof(msg), "M%sA%s<;>R%d\n\n", 
+        th, ak, Loco[slot].dir);
     send_msg(pcb, length_msg, msg);
-
+    
     // M0A<ak><;>s1\n\n
     memset(msg, 0, sizeof(msg));
     msg[0]='M'; length_msg=1;
@@ -167,6 +184,9 @@ static void locoAdd(const char *th, const char *ak, const char *ref, uint8_t slo
     msg[length_msg++]='s'; msg[length_msg++]='1';
     msg[length_msg++]='\n'; msg[length_msg++]='\n';
     send_msg(pcb, length_msg, msg);
+
+    heartbeatEnable[slot] = true;       // surveillance armee des qu'une loco est prise
+    heartbeat[slot]       = now_ms();
 
     tcp_output(pcb);
     LOG_INFO(TAG," loco_wi_+  th=%s ak=%s dcc=%d slot=%d", th, ak,Loco[slot].dccAdress, slot );
@@ -184,7 +204,7 @@ static void locoRelease(const char *th, const char *ak, uint8_t slot) {
     // LOG_INFO(TAG,"locoRelease th=%s ak=%s dccAdress=%d", th, ak, Loco[slot].dccAdress );
 
     if (Loco[slot].dccAdress == 0) {
-        LOG_INFO(TAG, "No loco address assigned for slot 0");
+        LOG_INFO(TAG, "No loco address assigned for slot %d", slot);
         return;
         }
 
@@ -212,7 +232,7 @@ static void locoAction(const char *th, char *ak, uint8_t slot) {
  //   LOG_INFO(TAG,"locoAction th=%s ak=%s", th, ak );
     
     if (Loco[slot].dccAdress == 0) {
-        LOG_INFO(TAG, "No loco address assigned for slot 0");
+        LOG_INFO(TAG, "No loco address assigned for slot %d", slot);
         return;
         }
 
@@ -381,42 +401,34 @@ if (ak[0] == 'F') {
 }
 
 // ─── checkHeartbeat() ────────────────────────────────────────────────────────
+
+#define HEARTBEAT_EXPIRY_MS_PER_S  2000   // expiration = délai annoncé à ED (10 s) x 2 = 20 s, à régler
+
 static void checkHeartbeat(uint8_t slot) {
-    char    msg[50];
-    uint8_t length_msg;
-    struct tcp_pcb *pcb = throttle[slot].pcb;
-    char    tmp[20]     = {};
-    uint32_t now        = now_ms();
+    if (heartbeat[slot] == 0) return;
+    uint32_t now = now_ms();
+    if ((int32_t)(now - heartbeat[slot]) <= (int32_t)(heartbeatTimeout * HEARTBEAT_EXPIRY_MS_PER_S))
+        return;
 
-    if (heartbeat[slot] > 0 &&
-        (heartbeat[slot] + (uint32_t)heartbeatTimeout * 5000) < now) {
-
-        Loco[slot].newSpeed = 0;
-        heartbeat[slot]     = 0;
-
-         // arrêt réel de la loco côté BiDiB (et pas seulement en mémoire)
-         // speed = 1 procoque emrgency stop côté BiDiB
+        LOG_INFO(TAG, "HEARTBEAT TIMEOUT slot=%d dcc=%d -> arret loco", slot, Loco[slot].dccAdress);
+    
+    // arrêt réel côté BiDiB
         if (Loco[slot].dccAdress != 0)
-            bidib_send_cs_drive(Loco[slot].dccAdress, 0, Loco[slot].dir,
-                                Loco[slot].LocoState, 1);
+        bidib_send_cs_drive(Loco[slot].dccAdress, 0, Loco[slot].dir,
+                            Loco[slot].LocoState, 1);
 
-
-        // Envoyer V0 emergency
-        memset(msg, 0, sizeof(msg));
-        msg[0]='M'; length_msg=1;
-        memcpy(msg+length_msg, Loco[slot].th, strlen(Loco[slot].th)); length_msg += strlen(Loco[slot].th);
-        msg[length_msg++]='A';
-        memcpy(msg+length_msg, Loco[slot].Loco_actionKey,
-               strlen(Loco[slot].Loco_actionKey));
-        length_msg += strlen(Loco[slot].Loco_actionKey);
-        const char suffix[] = {'<',';','>','V','0','\n','\n'};
-        memcpy(msg+length_msg, suffix, sizeof(suffix));
-        length_msg += sizeof(suffix);
-        send_msg(pcb, length_msg, msg);
-        tcp_output(pcb);
-    }
+    Loco[slot].newSpeed          = 0;
+    Loco[slot].dccAdress         = 0;
+    Loco[slot].Loco_actionKey[0] = '\0';
+    heartbeatEnable[slot]        = false;
+    heartbeat[slot]              = 0;
+    tcp_server_drop_client(slot);        // la connexion est coupée, le slot est libre
 }
 
+void withrottle_heartbeat_poll(void) {
+    for (uint8_t s = 0; s < MAX_THROTTLES; s++)
+        if (heartbeatEnable[s]) checkHeartbeat(s);
+}
 
 // ─── Envoi sur TCP avec controle (decoupe selon la place dispo) ─────────────
 static bool tcp_write_all(struct tcp_pcb *pcb, const char *p, size_t len) {
@@ -714,5 +726,5 @@ void process_rx_withrottle(rx_data_t *data, uint8_t slot) {
     }
 */
     // ── Heartbeat watchdog ────────────────────────────────────────────────────
-    if (heartbeatEnable[slot]) checkHeartbeat(slot);
+    // voir fonction void withrottle_heartbeat_poll(void);
 }
