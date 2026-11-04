@@ -394,6 +394,13 @@ static void checkHeartbeat(uint8_t slot) {
         Loco[slot].newSpeed = 0;
         heartbeat[slot]     = 0;
 
+         // arrêt réel de la loco côté BiDiB (et pas seulement en mémoire)
+         // speed = 1 procoque emrgency stop côté BiDiB
+        if (Loco[slot].dccAdress != 0)
+            bidib_send_cs_drive(Loco[slot].dccAdress, 0, Loco[slot].dir,
+                                Loco[slot].LocoState, 1);
+
+
         // Envoyer V0 emergency
         memset(msg, 0, sizeof(msg));
         msg[0]='M'; length_msg=1;
@@ -573,8 +580,11 @@ void process_rx_withrottle(rx_data_t *data, uint8_t slot) {
 
    // LOG_INFO(TAG, "rcv: <- slot %d message: %s", slot, data->msg);
 
-    throttle[slot].state = NODE_LOGGED_ON;
+    throttle[slot].state = NODE_LOGGED_ON;      
     struct tcp_pcb *pcb  = data->pcb;
+        // tout message d'ED prouve qu'il est vivant
+       if (heartbeatEnable[slot]) heartbeat[slot] = now_ms();   
+       
 
     // ── '*' heartbeat ─────────────────────────────────────────────────────────
     if (data->msg[0] == '*') {
