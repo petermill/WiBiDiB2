@@ -544,6 +544,31 @@ static void turnout_action(struct tcp_pcb *pcb, char act, const char *name_raw) 
     send_msg(pcb, len, msg);
     tcp_output(pcb);
 }
+
+// retour d'état : numéro d'accessoire reçu du maître (accnum = addr*2 + sortie)
+void withrottle_turnout_feedback(uint16_t accnum) {
+    uint16_t addr = accnum >> 1;
+    uint8_t  out  = accnum & 1;
+
+    wt_turnout_t *t = NULL;
+    for (size_t k = 0; k < WT_TURNOUT_COUNT; k++)
+        if (wt_turnouts[k].addr == addr) { t = &wt_turnouts[k]; break; }
+    if (!t) { LOG_INFO(TAG, "feedback accnum=%u : aiguillage inconnu (addr %u)", accnum, addr); return; }
+
+    uint8_t ns = (out == TURNOUT_OUT_THROWN) ? WT_TURNOUT_THROWN : WT_TURNOUT_CLOSED;
+    t->state = ns;
+    LOG_INFO(TAG, "feedback %s -> etat %d", t->sys, ns);
+
+    char msg[48];
+    int  len = snprintf(msg, sizeof(msg), "PTA%d%s\n\n", ns, t->sys);
+    for (uint8_t s = 0; s < MAX_THROTTLES; s++) {
+        if (throttle[s].state == NODE_LOGGED_ON && throttle[s].pcb) {
+            send_msg(throttle[s].pcb, len, msg);
+            tcp_output(throttle[s].pcb);
+        }
+    }
+}
+
 void withrottle_turnout_poll(void) {
         uint32_t now = now_ms();
         for (int i = 0; i < TURNOUT_OFF_MAX; i++) {

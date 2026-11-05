@@ -37,6 +37,7 @@
 #include "crc_8bit.h"
 #include "hardware/timer.h" 
 #include "roster_transfer.h"
+#include "withrottle_if.h"
 
 static const char *TAG = "bidib_client_parser";
 
@@ -606,6 +607,14 @@ static uint8_t process_bidib_message(uint8_t *bidib_rx_msg) {
          
             }
             break;
+
+        case MSG_LOCAL_ACCESSORY:   // p[0] = status, p[1..2] = adresse DCC (addr*2 + sortie)
+            uint8_t *p = msg_type + 1;
+            uint16_t accnum = (uint16_t)(p[1] | (p[2] << 8));
+            printf("[bidib_parser] LOCAL_ACCESSORY status=%02X accnum=%u\n", p[0], accnum);
+            withrottle_turnout_feedback(accnum);
+            break;
+
         // ── Messages non gérés ────────────────────────────────────────────────
         
         case MSG_LOCAL_SYNC:  // 0x74
