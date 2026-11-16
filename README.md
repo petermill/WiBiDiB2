@@ -89,12 +89,13 @@ Copy the resulting `.uf2` file to the Pico in BOOTSEL mode.
 ## Configuration
 
 - **Wi-Fi**: the Pico works as an **access point only** (no station mode): the phones join the Pico's own network.
-  The SSID and password are currently **hard-coded in the source**: change them in
-  <!-- TO COMPLETE: file name --> before building. The Pico announces itself with **mDNS**, so
-  Engine Driver finds the WiThrottle server automatically once the phone is on the Pico's network; no IP address
-  has to be typed in. <!-- TO COMPLETE: the Pico's IP address on its network, for a manual connection. -->
-  If the password is a private one, do not leave it in clear text in a public repository.
-- **WiThrottle port**: <!-- TO COMPLETE: TCP port used (12090 is the usual WiThrottle default) -->.
+  The SSID and password are read from a **local file that is not committed**:
+  copy `wifi_config.example.h` to `wifi_config.h` (same folder as `config.h`) and edit the copy before building.
+  `wifi_config.h` is listed in `.gitignore`; the build stops with a clear error if it is missing.
+  The Pico announces itself with **mDNS** (`WiBiDiB._withrottle._tcp.local.`), so Engine Driver finds the
+  WiThrottle server automatically once the phone is on the Pico's network. For a manual connection, the Pico's
+  address on its own network is `192.168.4.1`.
+- **WiThrottle port**: TCP **5550** (`WITHROTTLE_PORT`).
 - **Turnouts**: array `wt_turnouts[]` in `withrottle_if.c` (name `LTnn`, system name, address, initial state).
 
 ## Serial log
@@ -126,8 +127,8 @@ Useful lines: `[bidib_parser] LOCAL_ACCESSORY ...`, `feedback LT23 -> etat ...`,
 
 ## Planned improvements
 
-- [ ] **Wi-Fi credentials out of the source**: put the access-point SSID and password in a local, git-ignored header
-  (`network_config.h`) with a committed template (`network_config.example.h`).
+- [x] **Wi-Fi credentials out of the source**: the access-point SSID and password are in a local, git-ignored header
+  (`wifi_config.h`) with a committed template (`wifi_config.example.h`).
 - [ ] Optional **runtime Wi-Fi setup**: defaults in `config.h`, changeable without rebuilding (for example a small
   HTTP page served by the Pico in access-point mode, stored in flash).
 - [ ] Optional **per-device password** derived from the Pico's unique ID, so that units do not share one password.
