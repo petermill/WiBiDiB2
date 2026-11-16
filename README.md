@@ -21,8 +21,10 @@ It is part of a set of three repositories:
 - **Locos**: speed, direction, functions F0 to F28, emergency stop; the loco is stopped when the throttle leaves.
 - **Roster**: received from the Command Station in BiDiB `MSG_STRING` messages (namespace `0xFA`, in chunks);
   a throttle can only log on once the roster has arrived (*logon gate*). Limit: 32 locos in the Pico.
-- **Turnouts**: announced to Engine Driver (`PTT` / `PTL`), commanded with `PTA`. Built-in table of 4 turnouts
-  `LT21` to `LT24` (real addresses 20 to 23: the name `LTnn` corresponds to address `nn - 1`).
+- **Turnouts**: announced to Engine Driver (`PTT` / `PTL`), commanded with `PTA`. The list (up to 32 turnouts) is
+  **received from the Command Station** (`turnouts.xml` of the Roster program, see below); the name `LTnn`
+  corresponds to address `nn - 1`. An *inverted* turnout swaps closed / thrown, for the command and for the state
+  feedback. Until a list is received, a **built-in table** of 4 turnouts `LT21` to `LT24` (addresses 20 to 23) is used.
   Output 1 = thrown, 0 = closed. In Engine Driver: red = closed, green = thrown.
 - **State feedback**: the master sends `MSG_LOCAL_ACCESSORY` (0x73) on the bus for every accessory command
   (Engine Driver, Wizard **and** XpressNet throttles); the Pico turns it into a `PTA` to **all** connected throttles.
@@ -58,7 +60,8 @@ The Pico **does not work alone**:
 2. **GBM_CS** in the chain: it answers the Pico's `SUBSCRIBE` requests and sends it the roster.
 3. A **BiDiB host** (BiDiB-Wizard; Rocrail and iTrain still to be tested) that sends `SYS_ENABLE` to the node.
    **Without a host, no order is forwarded**: the Pico log shows `cs_accessory DROP: SYS_ENABLE pas recu`.
-4. The `roster.xml` produced with the **Roster** program (see its own README).
+4. The `roster.xml` produced with the **Roster** program (see its own README), and optionally its `turnouts.xml`
+   (same folder).
 
 ## Hardware
 
@@ -96,7 +99,12 @@ Copy the resulting `.uf2` file to the Pico in BOOTSEL mode.
   WiThrottle server automatically once the phone is on the Pico's network. For a manual connection, the Pico's
   address on its own network is `192.168.4.1`.
 - **WiThrottle port**: TCP **5550** (`WITHROTTLE_PORT`).
-- **Turnouts**: array `wt_turnouts[]` in `withrottle_if.c` (name `LTnn`, system name, address, initial state).
+- **Turnouts**: managed in the Roster program (`turnouts.xml`) and sent by the Command Station after the roster,
+  in `MSG_STRING_SET` messages of namespace **251** (`BIDIB_STRING_NAMESPACE_TURNOUTS`, the roster uses 250):
+  Base64 chunks, one echo per chunk, CRC8, final status `OK` / `LD` / `ER` in string id 255.
+  The built-in array `wt_turnouts[]` in `withrottle_if.c` is only the fallback used when nothing has been received.
+  The list is **not saved in flash**: it is sent again at every subscription. A throttle that is already connected
+  keeps the previous list until it connects again.
 
 ## Serial log
 
@@ -106,7 +114,8 @@ The Pico writes its log on its USB link (`/dev/ttyACM0` on Linux), for example:
 picocom -b 115200 /dev/ttyACM0
 ```
 
-Useful lines: `[bidib_parser] LOCAL_ACCESSORY ...`, `feedback LT23 -> etat ...`, `cs_accessory DROP ...`.
+Useful lines: `[bidib_parser] LOCAL_ACCESSORY ...`, `feedback LT23 -> etat ...`, `cs_accessory DROP ...`,
+and for the turnout list `turn_xfer` (`transfert aiguillages`, `aiguillages recus: N`).
 
 ## Source layout
 
@@ -116,12 +125,16 @@ Useful lines: `[bidib_parser] LOCAL_ACCESSORY ...`, `feedback LT23 -> etat ...`,
 | `bidib_client_if.c` | sending BiDiB messages (drive, accessory, subscription) |
 | `bidib_client_parser.c` | parsing messages received from the bus (roster, `MSG_LOCAL_ACCESSORY`, ...) |
 | `tcp_server.c` | TCP server (lwIP) |
+| `turnouts_transfer.c/.h` | receives the turnout list from the Command Station (namespace 251) |
+| `turnouts_blob.c/.h` | binary format of the turnout list (identical copy in GBM_CS) |
 
 ## Known limitations
 
 - When an accessory order is dropped (no `SYS_ENABLE`), the Pico still sends an optimistic `PTA` to
   Engine Driver: the displayed state may then be wrong. Planned fix: confirm only if the order was really sent.
-- Turnouts are a fixed table in the code (4 turnouts); managing them from the Roster program is planned.
+- The turnout list received from the Command Station has been tested **on a PC** (protocol, lost echo, corrupted
+  chunk, 32 turnouts) but **not yet on the hardware**; the *inverted* option in particular is to be checked on the layout.
+- The turnout list is not saved in flash, and a throttle already connected only sees a new list at its next connection.
 - The display of function states in Engine Driver after a reconnection still needs improvement.
 - Hosts other than BiDiB-Wizard (Rocrail, iTrain): **not tested**.
 
@@ -134,7 +147,8 @@ Useful lines: `[bidib_parser] LOCAL_ACCESSORY ...`, `feedback LT23 -> etat ...`,
 - [ ] Optional **per-device password** derived from the Pico's unique ID, so that units do not share one password.
 - [ ] **Turnout feedback only when the order was sent**: make `bidib_send_cs_accessory()` report whether the order
   left, and send the `PTA` confirmation to the throttles only in that case.
-- [ ] **Turnouts from the Roster program** instead of the fixed 4-entry table.
+- [x] **Turnouts from the Roster program** instead of the fixed 4-entry table (implemented; hardware test pending).
+- [ ] Save the turnout list in flash too, so that it survives a Pico reset without the Command Station.
 - [ ] Function-state display in Engine Driver after a reconnection.
 - [ ] Test with other hosts (Rocrail, iTrain) in place of BiDiB-Wizard.
 

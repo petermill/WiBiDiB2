@@ -28,6 +28,7 @@
 #include "tcp_server.h"
 #include "bidib_client_parser.h"
 #include "roster.h"
+#include "turnouts_transfer.h"   // tb_entry_t, withrottle_turnouts_set()
 
 
 static const char *TAG = "withrottle_if";
@@ -460,18 +461,45 @@ static bool tcp_write_all(struct tcp_pcb *pcb, const char *p, size_t len) {
 #define TURNOUT_OUT_THROWN   1     // valeur de (aspect & 1) pour "devie"  -- A VALIDER
 #define TURNOUT_COIL_MS      300   // duree entre ON et OFF                -- A REGLER
  
+#define WT_TURNOUT_MAX       TB_MAX        // 32, comme la table envoyee par le CS
+
 typedef struct {
-    const char *sys;     // nom systeme vu par ED
-    const char *user;    // nom affiche ("Lieu:Nom" -> filtre par lieu avec le delimiteur ':')
-    uint16_t    addr;    // adresse VRAIE envoyee au maitre (a partir de 0)
-    uint8_t     state;   // 1/2/4
+    char     sys[8];             // nom systeme vu par ED : "LT" + numero (jusqu'a LT2048)
+    char     user[TB_NAME_MAX];  // nom affiche ("Lieu:Nom" -> filtre par lieu avec le delimiteur ':')
+    uint16_t addr;               // adresse VRAIE envoyee au maitre (a partir de 0)
+    uint8_t  state;              // 1/2/4 : etat vu par ED (apres inversion)
+    uint8_t  inverted;           // 1 = cable a l'envers : on echange ferme/devie vers le bus
 } wt_turnout_t;
- 
-static wt_turnout_t wt_turnouts[] = {
-    { "LT24", "VI-4", 23, WT_TURNOUT_UNKNOWN },
-    // { "LT25", "...", 24, WT_TURNOUT_UNKNOWN },
+
+// Table interne : utilisee tant que le CS n'a rien envoye (ou s'il n'a pas de turnouts.xml)
+static wt_turnout_t wt_turnouts[WT_TURNOUT_MAX] = {
+    { "LT24", "VI-4", 23, WT_TURNOUT_UNKNOWN, 0 },
+    { "LT23", "VI-3", 22, WT_TURNOUT_UNKNOWN, 0 },
+    { "LT22", "VI-2", 21, WT_TURNOUT_UNKNOWN, 0 },
+    { "LT21", "VI-1", 20, WT_TURNOUT_UNKNOWN, 0 },
 };
-#define WT_TURNOUT_COUNT (sizeof(wt_turnouts) / sizeof(wt_turnouts[0]))
+static size_t wt_turnout_count = 4;
+
+// Remplace la table par celle recue du CS (turnouts_transfer.c). Les etats repartent a "inconnu".
+// Les telephones deja connectes gardent l'ancienne liste jusqu'a leur prochaine connexion.
+bool withrottle_turnouts_set(const tb_entry_t *e, uint8_t count) {
+    if (count > WT_TURNOUT_MAX) return false;
+    for (uint8_t i = 0; i < count; i++) {
+        if (e[i].number < TB_NUM_MIN || e[i].number > TB_NUM_MAX) return false;
+    }
+    for (uint8_t i = 0; i < count; i++) {
+        wt_turnout_t *t = &wt_turnouts[i];
+        snprintf(t->sys, sizeof(t->sys), "LT%u", (unsigned)e[i].number);
+        // nom vide : on affiche le nom systeme
+        snprintf(t->user, sizeof(t->user), "%s", e[i].name[0] ? e[i].name : t->sys);
+        t->addr     = (uint16_t)(e[i].number - TURNOUT_ADDR_OFFSET);
+        t->state    = WT_TURNOUT_UNKNOWN;
+        t->inverted = e[i].inverted ? 1 : 0;
+    }
+    wt_turnout_count = count;
+    LOG_INFO(TAG, "table d'aiguillages remplacee : %u aiguillage(s)", (unsigned)count);
+    return true;
+}
  
 // ---- OFF differe (sans bloquer la boucle) ----
 #define TURNOUT_OFF_MAX 8
@@ -493,16 +521,16 @@ static void turnout_coil_on(uint16_t addr, uint8_t out) {
  
 // PTT + PTL, a l'accueil
 static void send_turnout_list(struct tcp_pcb *pcb) {
-    static char buf[256 + 80 * 8];
+    static char buf[256 + 64 * WT_TURNOUT_MAX];
     size_t n = 0;
     n += snprintf(buf + n, sizeof(buf) - n,
         "PTT]\\[Turnouts}|{Turnout]\\[Closed}|{2]\\[Thrown}|{4]\\[Unknown}|{1]\\[Inconsistent}|{8\n");
     n += snprintf(buf + n, sizeof(buf) - n, "PTL");
-    for (size_t i = 0; i < WT_TURNOUT_COUNT && n < sizeof(buf) - 80; i++)
+    for (size_t i = 0; i < wt_turnout_count && n < sizeof(buf) - 64; i++)
         n += snprintf(buf + n, sizeof(buf) - n, "]\\[%s}|{%s}|{%d",
                       wt_turnouts[i].sys, wt_turnouts[i].user, wt_turnouts[i].state);
     n += snprintf(buf + n, sizeof(buf) - n, "\n");
-    LOG_INFO(TAG, "PTT/PTL envoyes (%u aiguillages)", (unsigned)WT_TURNOUT_COUNT);
+    LOG_INFO(TAG, "PTT/PTL envoyes (%u aiguillages)", (unsigned)wt_turnout_count);
     tcp_write_all(pcb, buf, n);
 }
 // commande recue : PTA<act><nom>
@@ -519,10 +547,10 @@ static void turnout_action(struct tcp_pcb *pcb, char act, const char *name_raw) 
     int num = (int)strtol(p, NULL, 10);                    // "LT24" -> 24, "24" -> 24
  
     wt_turnout_t *t = NULL;
-    for (size_t k = 0; k < WT_TURNOUT_COUNT; k++)
+    for (size_t k = 0; k < wt_turnout_count; k++)
         if (strcmp(name, wt_turnouts[k].sys) == 0) { t = &wt_turnouts[k]; break; }
     if (!t)
-        for (size_t k = 0; k < WT_TURNOUT_COUNT; k++)
+        for (size_t k = 0; k < wt_turnout_count; k++)
             if ((int)wt_turnouts[k].addr + TURNOUT_ADDR_OFFSET == num) { t = &wt_turnouts[k]; break; }
  
     uint8_t cur = t ? t->state : WT_TURNOUT_UNKNOWN;       // adresse tapee a la main : etat non memorise
@@ -537,7 +565,10 @@ static void turnout_action(struct tcp_pcb *pcb, char act, const char *name_raw) 
     if (t) t->state = ns;
  
     LOG_INFO(TAG, "PTA act=%c nom=%s -> adresse vraie %d, etat %d", act, name, addr, ns);
-    turnout_coil_on((uint16_t)addr, (ns == WT_TURNOUT_THROWN) ? TURNOUT_OUT_THROWN : TURNOUT_OUT_CLOSED);
+    uint8_t out = (ns == WT_TURNOUT_THROWN) ? TURNOUT_OUT_THROWN : TURNOUT_OUT_CLOSED;
+    if (t && t->inverted)                                  // aiguillage cable a l'envers
+        out = (out == TURNOUT_OUT_THROWN) ? TURNOUT_OUT_CLOSED : TURNOUT_OUT_THROWN;
+    turnout_coil_on((uint16_t)addr, out);
  
     char msg[48];                                          // confirmation optimiste
     int  len = snprintf(msg, sizeof(msg), "PTA%d%s\n\n", ns, name);
@@ -551,10 +582,12 @@ void withrottle_turnout_feedback(uint16_t accnum) {
     uint8_t  out  = accnum & 1;
 
     wt_turnout_t *t = NULL;
-    for (size_t k = 0; k < WT_TURNOUT_COUNT; k++)
+    for (size_t k = 0; k < wt_turnout_count; k++)
         if (wt_turnouts[k].addr == addr) { t = &wt_turnouts[k]; break; }
     if (!t) { LOG_INFO(TAG, "feedback accnum=%u : aiguillage inconnu (addr %u)", accnum, addr); return; }
 
+    if (t->inverted)                                       // retour du bus : on remet dans le sens vu par ED
+        out = (out == TURNOUT_OUT_THROWN) ? TURNOUT_OUT_CLOSED : TURNOUT_OUT_THROWN;
     uint8_t ns = (out == TURNOUT_OUT_THROWN) ? WT_TURNOUT_THROWN : WT_TURNOUT_CLOSED;
     t->state = ns;
     LOG_INFO(TAG, "feedback %s -> etat %d", t->sys, ns);

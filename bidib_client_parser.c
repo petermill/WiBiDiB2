@@ -20,7 +20,6 @@
  *   bidib_send_cs_drive()  → MSG_GUEST_REQ_SEND { TARGET_MODE_DCCGEN, MSG_CS_DRIVE }
  *   bidib_send_boost_state() → MSG_GUEST_REQ_SEND { TARGET_MODE_BOOSTER, MSG_BOOST_ON/OFF }
  */
-
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>

@@ -8,8 +8,12 @@
 #define CONFIG_H_
 
 // ─── WiFi AP ────────────────────────────────────────────────────────────────
-#define WIFI_SSID        "myssid"
-#define WIFI_PASSWORD    "mypassword"
+/* Wi-Fi access-point credentials: kept in a local file that is not committed.*/
+#if __has_include("wifi_config.h")
+#include "wifi_config.h"
+#else
+#error "wifi_config.h is missing: copy wifi_config.example.h to wifi_config.h and set your SSID and password"
+#endif
 // Adresse IP fixe du Pico en mode AP
 #define AP_IP_ADDR       "192.168.4.1"
 

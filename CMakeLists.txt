@@ -48,6 +48,8 @@ pico_sdk_init()
     roster.c
     roster_transfer.c
     roster_store.c
+    turnouts_blob.c
+    turnouts_transfer.c
 )
 
 # Générer le header C depuis le fichier PIO
